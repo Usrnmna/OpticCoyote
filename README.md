@@ -2,6 +2,139 @@
 
 This Arduino sketch polls four fixed-address RCWL-1655 ultrasonic sensors through a TCA9548A I2C multiplexer. It reads one sensor at a time, applies a three-reading median filter, finds the nearest object, drives an alarm output, and publishes one CSV record per complete scan.
 
+# Project Draft Flowchart
+
+            
+
+                 FOUR-SENSOR ULTRASONIC DETECTION SYSTEM
+                 =======================================
+
+             +-----------------------------------------+
+             |              DC POWER INPUT             |
+             |        Regulated 5 V or regulated 3.3 V |
+             +--------------------+--------------------+
+                                  |
+                         +--------v--------+
+                         | Power distribution|
+                         |  +V and common GND|
+                         +---+----+----+----+
+                             |    |    |
+                 +-----------+    |    +-------------------+
+                 |                |                        |
+          +------v------+  +------v-------+         +------v------+
+          |   Arduino   |  | TCA9548A I²C|         | RCWL sensor |
+          | Controller  |  | Multiplexer |         | power rails |
+          +-------------+  +--------------+         +-------------+
+                 |                |
+                 | SDA            | Upstream SDA/SCL
+                 | SCL            |
+                 +--------------->|
+                 |                |
+                 |                +-- Channel 0 SDA/SCL ----------+
+                 |                |                               |
+                 |                |                        +------v------+
+                 |                |                        | RCWL-1655 #1|
+                 |                |                        | I²C: 0x57   |
+                 |                |                        | Front/left  |
+                 |                |                        +------+------+
+                 |                |                               |
+                 |                |                        Approx. distance
+                 |                |
+                 |                +-- Channel 1 SDA/SCL ----------+
+                 |                |                               |
+                 |                |                        +------v------+
+                 |                |                        | RCWL-1655 #2|
+                 |                |                        | I²C: 0x57   |
+                 |                |                        | Front/right |
+                 |                |                        +------+------+
+                 |                |                               |
+                 |                |                        Approx. distance
+                 |                |
+                 |                +-- Channel 2 SDA/SCL ----------+
+                 |                |                               |
+                 |                |                        +------v------+
+                 |                |                        | RCWL-1655 #3|
+                 |                |                        | I²C: 0x57   |
+                 |                |                        | Rear/left   |
+                 |                |                        +------+------+
+                 |                |                               |
+                 |                |                        Approx. distance
+                 |                |
+                 |                +-- Channel 3 SDA/SCL ----------+
+                 |                                                |
+                 |                                         +------v------+
+                 |                                         | RCWL-1655 #4|
+                 |                                         | I²C: 0x57   |
+                 |                                         | Rear/right  |
+                 |                                         +------+------+
+                 |                                                |
+                 |                                         Approx. distance
+                 |
+                 v
+       +-----------------------+
+       | Measurement scheduler |
+       +-----------+-----------+
+                   |
+                   v
+       [Select mux channel 0]
+                   |
+       [Trigger/read sensor #1]
+                   |
+       [Store distance D1]
+                   |
+       [Wait for echo field to clear]
+                   |
+       [Select mux channel 1]
+                   |
+       [Trigger/read sensor #2]
+                   |
+       [Store distance D2]
+                   |
+       [Wait for echo field to clear]
+                   |
+       [Select mux channel 2]
+                   |
+       [Trigger/read sensor #3]
+                   |
+       [Store distance D3]
+                   |
+       [Wait for echo field to clear]
+                   |
+       [Select mux channel 3]
+                   |
+       [Trigger/read sensor #4]
+                   |
+       [Store distance D4]
+                   |
+                   v
+       +------------------------+
+       | Validate and filter    |
+       | - Reject invalid reads |
+       | - Median/moving average|
+       | - Apply min/max range  |
+       +-----------+------------+
+                   |
+                   v
+       +------------------------+
+       | Object decision logic  |
+       |                        |
+       | Dn < warning distance? |
+       +-----+--------------+---+
+             | Yes          | No
+             v              v
+       [Object detected] [Area clear]
+             |
+             v
+       +------------------------+
+       | System output          |
+       | - Direction/zone       |
+       | - Approx. distance     |
+       | - LED/buzzer/display   |
+       | - Motor stop/steering  |
+       | - Serial telemetry     |
+       +------------------------+
+
+
 ## Required hardware
 
 - One Arduino-compatible controller
