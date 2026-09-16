@@ -71,10 +71,10 @@ Do not fire all four sensors simultaneously. Reflections from one transducer can
 
 
 
+## RCWL-1655-Datasheet
+<a href><https://makerhero.com/img/files/download/RCWL-1655-Datasheet.pdf>
 
 
-
-
-Used Repos - RCWL_1601_i2c:
+## Used Repos - RCWL_1601_i2c:
 <b><a href><https://github.com/markwal/RCWL_1601_i2c>
   <b></n>An Arduino library for communicating with a RCWL-1601 distance sensor in i2c mode.</b>
