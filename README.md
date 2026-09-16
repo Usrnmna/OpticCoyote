@@ -68,3 +68,12 @@ One complete four-sensor scan takes about 420 ms with the conservative default t
 6. Tune the range and warning constants for the installation.
 
 Do not fire all four sensors simultaneously. Reflections from one transducer can be received by another and create false detections.
+
+
+
+
+
+
+
+RCWL_1601_i2c  <a href><https://github.com/markwal/RCWL_1601_i2c><</>
+An Arduino library for communicating with a RCWL-1601 distance sensor in i2c mode.
