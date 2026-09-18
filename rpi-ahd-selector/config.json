@@ -1,0 +1,14 @@
+{
+  "initial_camera": 1,
+  "sources": [
+    "v4l2src device=/dev/video0 do-timestamp=true ! decodebin",
+    "v4l2src device=/dev/video2 do-timestamp=true ! decodebin",
+    "v4l2src device=/dev/video4 do-timestamp=true ! decodebin",
+    "v4l2src device=/dev/video6 do-timestamp=true ! decodebin"
+  ],
+  "sink": "kmssink driver-name=vc4 force-modesetting=true sync=false",
+  "gpio_pins": [],
+  "gpio_active_low": true,
+  "serial_port": null,
+  "serial_baud": 115200
+}
