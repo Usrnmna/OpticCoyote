@@ -1,6 +1,11 @@
 #include <Wire.h>
 
 /*
+  DRAFT GPIO CAMERA LINK: standalone copy of the ultrasonic sketch.
+  Upload this sketch INSTEAD OF the original. See the root README for wiring.
+  CameraLink settings and publishCameraWarning() are the added interface.
+  Four outputs encode one camera number, not a binary number or pulse count.
+
   Four RCWL-1655 ultrasonic sensors through a TCA9548A I2C multiplexer.
 
   Target: Arduino-compatible board using the standard Wire library.
@@ -69,6 +74,22 @@ constexpr uint32_t kHeartbeatToggleMs = 500;
 constexpr uint32_t kSerialBaud = 115200;
 }  // namespace Config
 
+// DRAFT LINK SETTINGS: camera order is independent of sensor/mux order.
+// Defaults target a classic Uno/Nano. Verify free pins on other boards.
+namespace CameraLink {
+constexpr uint8_t kCameraCount = 4;
+// Camera 1, 2, 3, 4 respectively. HIGH drives an NPN transistor ON, pulling
+// the corresponding Pi input LOW. Never connect a 5 V output directly to Pi.
+constexpr uint8_t kOutputPins[] = {4, 5, 6, 7};
+// Sensor order: front_left, front_right, rear_left, rear_right.
+constexpr uint8_t kCameraForSensor[] = {1, 2, 3, 4};
+}  // namespace CameraLink
+
+static_assert(sizeof(CameraLink::kOutputPins) == CameraLink::kCameraCount,
+              "Provide four uint8_t camera output pins");
+static_assert(sizeof(CameraLink::kCameraForSensor) == Config::kSensorCount,
+              "Provide one uint8_t camera number per sensor");
+
 // Catch common editing mistakes before a sketch can be uploaded.
 static_assert(Config::kSensorCount == 4, "This sketch uses four sensor zones");
 static_assert(sizeof(Config::kMuxChannels) / sizeof(Config::kMuxChannels[0]) ==
@@ -115,6 +136,63 @@ struct SensorState {
   uint8_t consecutiveErrors;  // Saturates at 255; diagnostic only, not in CSV.
   bool valid;
 };
+
+// Validate editable link settings before configuring any outputs. Multiple
+// zones may map to one camera, but outputs must be distinct and avoid the
+// sensor bus, alarm, heartbeat and serial pins. Return false on a conflict.
+bool cameraLinkSettingsValid() {
+  for (uint8_t i = 0; i < CameraLink::kCameraCount; ++i) {
+    const uint8_t pin = CameraLink::kOutputPins[i];
+    if (pin >= NUM_DIGITAL_PINS || pin == Design::kDisabledOutputPin ||
+        pin == 0 || pin == 1 ||
+        pin == SDA || pin == SCL || pin == Config::kAlarmPin ||
+        pin == Config::kHeartbeatPin) {
+      return false;
+    }
+    for (uint8_t j = 0; j < i; ++j) {
+      if (pin == CameraLink::kOutputPins[j]) {
+        return false;
+      }
+    }
+  }
+  for (uint8_t i = 0; i < Config::kSensorCount; ++i) {
+    if (CameraLink::kCameraForSensor[i] < 1 ||
+        CameraLink::kCameraForSensor[i] > CameraLink::kCameraCount) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Start all camera transistors OFF. Preload LOW before enabling each output
+// to avoid a deliberate startup warning. External base pull-downs cover reset.
+void setupCameraLink() {
+  for (uint8_t i = 0; i < CameraLink::kCameraCount; ++i) {
+    digitalWrite(CameraLink::kOutputPins[i], LOW);
+    pinMode(CameraLink::kOutputPins[i], OUTPUT);
+  }
+}
+
+// Publish a held one-of-four selection after a scan. Invalid/no-warning input
+// clears all outputs. Turn the old selection OFF before enabling a new one;
+// the receiver debounces the short gap. Repeated selections produce no writes.
+void publishCameraWarning(int8_t nearestSensor, bool warning) {
+  static uint8_t previousCamera = 0;
+  uint8_t camera = 0;
+  if (warning && nearestSensor >= 0 && nearestSensor < Config::kSensorCount) {
+    camera = CameraLink::kCameraForSensor[nearestSensor];
+  }
+  if (camera == previousCamera) {
+    return;
+  }
+  for (uint8_t i = 0; i < CameraLink::kCameraCount; ++i) {
+    digitalWrite(CameraLink::kOutputPins[i], LOW);
+  }
+  if (camera != 0) {
+    digitalWrite(CameraLink::kOutputPins[camera - 1], HIGH);
+  }
+  previousCamera = camera;
+}
 
 SensorState sensors[Config::kSensorCount] = {};  // All readings initially invalid.
 
@@ -336,6 +414,7 @@ void publishCompletedScan() {
           Config::kCriticalDistanceMm;
 
   setAlarm(warning);
+  publishCameraWarning(nearest, warning);
 
   Serial.print(millis());
   for (uint8_t i = 0; i < Config::kSensorCount; ++i) {
@@ -440,6 +519,13 @@ void serviceHeartbeat(uint32_t now) {
 // Arduino startup: configure outputs and buses, request mux isolation, and
 // print the CSV header once. No sensor availability check is made here.
 void setup() {
+  Serial.begin(Config::kSerialBaud);
+  if (!cameraLinkSettingsValid()) {
+    Serial.println(F("ERROR: check CameraLink pins and sensor-to-camera map"));
+    // Configuration error: halt before touching GPIO or starting measurements.
+    while (true) {}
+  }
+  setupCameraLink();
   if (Config::kHeartbeatPin != Design::kDisabledOutputPin) {
     pinMode(Config::kHeartbeatPin, OUTPUT);
   }
@@ -448,7 +534,6 @@ void setup() {
   }
   setAlarm(false);
 
-  Serial.begin(Config::kSerialBaud);
   Wire.begin();
   Wire.setClock(Config::kI2cClockHz);
 
