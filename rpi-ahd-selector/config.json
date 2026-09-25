@@ -7,8 +7,17 @@
     "v4l2src device=/dev/video6 do-timestamp=true ! decodebin"
   ],
   "sink": "kmssink driver-name=vc4 force-modesetting=true sync=false",
+  "output_width": 1280,
+  "output_height": 720,
+  "output_fps": 60,
+  "watchdog_timeout_ms": 5000,
+  "retry_delay_seconds": 2,
   "gpio_pins": [],
   "gpio_active_low": true,
+  "gpio_sample_seconds": 0.01,
+  "gpio_debounce_seconds": 0.03,
   "serial_port": null,
-  "serial_baud": 115200
+  "serial_baud": 115200,
+  "serial_read_timeout_seconds": 0.1,
+  "serial_write_timeout_seconds": 0.5
 }

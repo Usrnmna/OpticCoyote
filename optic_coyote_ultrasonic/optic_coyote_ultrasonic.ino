@@ -12,52 +12,114 @@
     RCWL Echo/TX/SDA pin -> TCA9548A channel SDA
 
   Serial output is one CSV record per completed four-sensor scan.
+  Start manual review with Config, then serviceSensorPolling(), then
+  publishCompletedScan(). Function comments describe inputs and side effects.
 */
 
+// Fixed protocol/filter design. Changing these requires reviewing the matching
+// decoding/filter functions; they are not installation tuning parameters.
+namespace Design {
+constexpr uint8_t kMuxChannelCount = 8;
+constexpr uint8_t kStartMeasurementCommand = 0x01;
+constexpr uint8_t kDistanceByteCount = 3;  // Big-endian 24-bit micrometres.
+constexpr uint32_t kMicrometresPerMillimetre = 1000UL;
+constexpr uint8_t kHistorySize = 3;  // medianOfHistory() implements three slots.
+constexpr uint8_t kDisabledOutputPin = 255;
+}  // namespace Design
+
+// INSTALLATION SETTINGS: edit this section, then rebuild/upload the sketch.
 namespace Config {
+// I2C addresses are 7-bit. The sensor address is fixed for the RCWL-1655;
+// change the mux address only to match its physical A0/A1/A2 address straps.
 constexpr uint8_t kMuxAddress = 0x70;
 constexpr uint8_t kSensorAddress = 0x57;
+constexpr uint32_t kI2cClockHz = 100000UL;
+
+// Fixed four-zone project layout, not a sensor-count tuning option.
 constexpr uint8_t kSensorCount = 4;
 
-// Sensor channels on the TCA9548A. Change these if different mux ports are used.
-constexpr uint8_t kMuxChannels[kSensorCount] = {0, 1, 2, 3};
+// Matching indexes define the zone, physical mux port, and CSV column order.
+// Channels must be distinct, in 0..7. Labels must be nonempty and contain no
+// commas/newlines. Renaming a label changes its CSV header and nearest_zone.
+constexpr uint8_t kMuxChannels[] = {0, 1, 2, 3};
+const char *const kZoneLabels[] = {
+    "front_left", "front_right", "rear_left", "rear_right"};
 
-// The datasheet allows up to 100 ms for a one-shot measurement.
+// Milliseconds: wait for one measurement, then pause before the next sensor.
+// The datasheet allows up to 100 ms; verify hardware before reducing this wait.
 constexpr uint16_t kMeasurementTimeMs = 100;
 constexpr uint8_t kInterSensorGuardMs = 5;
 
-// Expected usable RCWL-1655 range for this installation.
+// Inclusive accepted range in mm. Samples outside it are invalid, not clipped.
 constexpr uint16_t kMinimumDistanceMm = 200;
 constexpr uint16_t kMaximumDistanceMm = 5000;
 
-// Object-detection thresholds. Tune these for the actual machine/vehicle.
+// Inclusive thresholds in mm, applied to filtered readings at scan completion.
+// WARNING and CRITICAL both activate the same alarm pin; CRITICAL changes CSV.
 constexpr uint16_t kWarningDistanceMm = 600;
 constexpr uint16_t kCriticalDistanceMm = 300;
 
-// Set to 255 if no alarm output is required.
+// Board digital pin numbers. Set either pin to 255 to disable that output.
 constexpr uint8_t kAlarmPin = 8;
 constexpr bool kAlarmActiveHigh = true;
+constexpr uint8_t kHeartbeatPin = LED_BUILTIN;
+// Time between LED toggles; 500 ms means one complete on/off cycle per second.
+constexpr uint32_t kHeartbeatToggleMs = 500;
 
 constexpr uint32_t kSerialBaud = 115200;
 }  // namespace Config
 
+// Catch common editing mistakes before a sketch can be uploaded.
+static_assert(Config::kSensorCount == 4, "This sketch uses four sensor zones");
+static_assert(sizeof(Config::kMuxChannels) / sizeof(Config::kMuxChannels[0]) ==
+                  Config::kSensorCount,
+              "Provide one mux channel for each sensor zone");
+static_assert(sizeof(Config::kZoneLabels) / sizeof(Config::kZoneLabels[0]) ==
+                  Config::kSensorCount,
+              "Provide one label for each sensor zone");
+static_assert(Config::kMuxChannels[0] < Design::kMuxChannelCount &&
+                  Config::kMuxChannels[1] < Design::kMuxChannelCount &&
+                  Config::kMuxChannels[2] < Design::kMuxChannelCount &&
+                  Config::kMuxChannels[3] < Design::kMuxChannelCount,
+              "Mux channel numbers must be in 0..7");
+static_assert(Config::kMuxChannels[0] != Config::kMuxChannels[1] &&
+                  Config::kMuxChannels[0] != Config::kMuxChannels[2] &&
+                  Config::kMuxChannels[0] != Config::kMuxChannels[3] &&
+                  Config::kMuxChannels[1] != Config::kMuxChannels[2] &&
+                  Config::kMuxChannels[1] != Config::kMuxChannels[3] &&
+                  Config::kMuxChannels[2] != Config::kMuxChannels[3],
+              "Each sensor needs a distinct mux channel");
+static_assert(Config::kMinimumDistanceMm <= Config::kMaximumDistanceMm,
+              "Minimum accepted distance must not exceed maximum");
+static_assert(Config::kCriticalDistanceMm <= Config::kWarningDistanceMm,
+              "Critical threshold must not exceed warning threshold");
+static_assert(Config::kMeasurementTimeMs > 0 && Config::kI2cClockHz > 0 &&
+                  Config::kSerialBaud > 0,
+              "Measurement wait and bus/serial rates must be positive");
+static_assert(Config::kHeartbeatToggleMs > 0 &&
+                  Config::kHeartbeatToggleMs < 0x80000000UL,
+              "Heartbeat interval must be positive and fit deadline arithmetic");
+static_assert(Config::kAlarmPin == Design::kDisabledOutputPin ||
+                  Config::kHeartbeatPin == Design::kDisabledOutputPin ||
+                  Config::kAlarmPin != Config::kHeartbeatPin,
+              "Alarm and heartbeat must use different enabled pins");
+
+// RUNTIME STATE: no user settings below this point.
+// History contains only successful samples and survives failures. 'valid'
+// describes the latest attempt; an invalid sensor is excluded from decisions.
 struct SensorState {
-  const char *zone;
-  uint16_t historyMm[3];
+  uint16_t historyMm[Design::kHistorySize];
   uint16_t filteredDistanceMm;
   uint8_t historyCount;
   uint8_t historyIndex;
-  uint8_t consecutiveErrors;
+  uint8_t consecutiveErrors;  // Saturates at 255; diagnostic only, not in CSV.
   bool valid;
 };
 
-SensorState sensors[Config::kSensorCount] = {
-    {"front_left", {0, 0, 0}, 0, 0, 0, 0, false},
-    {"front_right", {0, 0, 0}, 0, 0, 0, 0, false},
-    {"rear_left", {0, 0, 0}, 0, 0, 0, 0, false},
-    {"rear_right", {0, 0, 0}, 0, 0, 0, 0, false},
-};
+SensorState sensors[Config::kSensorCount] = {};  // All readings initially invalid.
 
+// START -> WAIT -> finishCurrentSensor() -> GUARD -> START of next sensor.
+// A failed trigger skips WAIT. A CSV row is published after the fourth attempt.
 enum class PollPhase : uint8_t {
   kStartMeasurement,
   kWaitForMeasurement,
@@ -70,12 +132,17 @@ uint32_t phaseDeadlineMs = 0;
 uint32_t heartbeatDeadlineMs = 0;
 bool heartbeatState = false;
 
+// DEADLINES AND I2C: select one sensor, trigger it, then read its result.
+// Return whether a millis() deadline has elapsed, including counter wraparound.
+// Intervals and time between servicing must remain below 2^31 milliseconds.
 bool deadlineReached(uint32_t now, uint32_t deadline) {
   return static_cast<int32_t>(now - deadline) >= 0;
 }
 
+// Enable exactly one physical mux channel (0..7); return false on invalid input
+// or an I2C write error. This changes which sensor is connected to the bus.
 bool selectMuxChannel(uint8_t channel) {
-  if (channel > 7) {
+  if (channel >= Design::kMuxChannelCount) {
     return false;
   }
 
@@ -84,27 +151,35 @@ bool selectMuxChannel(uint8_t channel) {
   return Wire.endTransmission() == 0;
 }
 
+// Request isolation of all sensors. The I2C result is intentionally not checked;
+// a failed mux write can leave a channel enabled until a later successful write.
 void disableAllMuxChannels() {
   Wire.beginTransmission(Config::kMuxAddress);
   Wire.write(static_cast<uint8_t>(0));
   Wire.endTransmission();
 }
 
+// Select a logical sensor index (0..kSensorCount-1) and send one-shot trigger.
+// Return true only when both writes succeed; conversion is waited for elsewhere.
 bool startRanging(uint8_t sensorIndex) {
   if (!selectMuxChannel(Config::kMuxChannels[sensorIndex])) {
     return false;
   }
 
   Wire.beginTransmission(Config::kSensorAddress);
-  Wire.write(static_cast<uint8_t>(0x01));
+  Wire.write(Design::kStartMeasurementCommand);
   return Wire.endTransmission() == 0;
 }
 
+// Read the already-selected sensor after conversion. Return true and assign
+// distanceMm only for a complete, in-range result; leave the output unchanged
+// on failure. Fractional millimetres are discarded during integer conversion.
 bool readDistanceMm(uint16_t &distanceMm) {
   const uint8_t received = Wire.requestFrom(
-      Config::kSensorAddress, static_cast<uint8_t>(3));
+      Config::kSensorAddress, Design::kDistanceByteCount);
 
-  if (received != 3 || Wire.available() < 3) {
+  if (received != Design::kDistanceByteCount ||
+      Wire.available() < Design::kDistanceByteCount) {
     while (Wire.available() > 0) {
       Wire.read();
     }
@@ -116,7 +191,8 @@ bool readDistanceMm(uint16_t &distanceMm) {
       (static_cast<uint32_t>(Wire.read()) << 8) |
       static_cast<uint32_t>(Wire.read());
 
-  const uint32_t measuredMm = rawMicrometres / 1000UL;
+  const uint32_t measuredMm =
+      rawMicrometres / Design::kMicrometresPerMillimetre;
   if (measuredMm < Config::kMinimumDistanceMm ||
       measuredMm > Config::kMaximumDistanceMm) {
     return false;
@@ -126,6 +202,10 @@ bool readDistanceMm(uint16_t &distanceMm) {
   return true;
 }
 
+// FILTERING AND VALIDITY: successful history is separate from current validity.
+// Read-only filter: return 0 for no samples, the sole sample for one, the
+// integer average for two, or the median of the last three successful samples.
+// This sorting implementation is deliberately fixed to a three-sample window.
 uint16_t medianOfHistory(const SensorState &sensor) {
   if (sensor.historyCount == 0) {
     return 0;
@@ -165,12 +245,16 @@ uint16_t medianOfHistory(const SensorState &sensor) {
   return b;
 }
 
+// Store one accepted mm value for a logical index, refresh its filtered value,
+// clear its error count, and mark it valid. Older successful history is reused
+// even after failed attempts, so the first recovered output can include it.
 void recordSuccessfulReading(uint8_t sensorIndex, uint16_t distanceMm) {
   SensorState &sensor = sensors[sensorIndex];
   sensor.historyMm[sensor.historyIndex] = distanceMm;
-  sensor.historyIndex = static_cast<uint8_t>((sensor.historyIndex + 1) % 3);
+  sensor.historyIndex = static_cast<uint8_t>(
+      (sensor.historyIndex + 1) % Design::kHistorySize);
 
-  if (sensor.historyCount < 3) {
+  if (sensor.historyCount < Design::kHistorySize) {
     ++sensor.historyCount;
   }
 
@@ -179,16 +263,21 @@ void recordSuccessfulReading(uint8_t sensorIndex, uint16_t distanceMm) {
   sensor.valid = true;
 }
 
+// Invalidate a logical sensor immediately and increment its diagnostic error
+// count. Retain its last filtered distance and history; neither is published
+// while invalid. This does not update the alarm until the scan is completed.
 void recordFailedReading(uint8_t sensorIndex) {
   SensorState &sensor = sensors[sensorIndex];
   if (sensor.consecutiveErrors < 255) {
     ++sensor.consecutiveErrors;
   }
 
-  // Do not make object decisions using a stale reading.
+  // Exclude this sensor until a later successful attempt.
   sensor.valid = false;
 }
 
+// Return the valid sensor index with the smallest filtered distance, or -1 if
+// none are valid. Equal distances choose the earlier configured zone. No writes.
 int8_t findNearestSensor() {
   int8_t nearest = -1;
 
@@ -207,8 +296,11 @@ int8_t findNearestSensor() {
   return nearest;
 }
 
+// OUTPUTS: one alarm decision and CSV row per completed four-sensor scan.
+// Drive the configured alarm level for active/inactive, respecting polarity.
+// A disabled pin has no effect; this function does not decide alarm conditions.
 void setAlarm(bool active) {
-  if (Config::kAlarmPin == 255) {
+  if (Config::kAlarmPin == Design::kDisabledOutputPin) {
     return;
   }
 
@@ -217,6 +309,8 @@ void setAlarm(bool active) {
   digitalWrite(Config::kAlarmPin, active ? activeLevel : inactiveLevel);
 }
 
+// Print one CSV distance field: filtered integer mm, or -1 when invalid.
+// Does not print a delimiter or line ending, and does not alter sensor state.
 void printDistanceOrInvalid(const SensorState &sensor) {
   if (sensor.valid) {
     Serial.print(sensor.filteredDistanceMm);
@@ -225,6 +319,11 @@ void printDistanceOrInvalid(const SensorState &sensor) {
   }
 }
 
+// Find the nearest filtered reading, update the alarm, and print one CSV row.
+// Alarm changes occur once per complete scan, not at each individual reading.
+// NO_VALID_SENSORS turns the alarm OFF; sensor failure has no separate alarm.
+// CLEAR can include failed sensors if all remaining valid readings are distant.
+// The four measurements were collected sequentially, not simultaneously.
 void publishCompletedScan() {
   const int8_t nearest = findNearestSensor();
   const bool warning =
@@ -246,7 +345,7 @@ void publishCompletedScan() {
 
   Serial.print(',');
   if (nearest >= 0) {
-    Serial.print(sensors[static_cast<uint8_t>(nearest)].zone);
+    Serial.print(Config::kZoneLabels[static_cast<uint8_t>(nearest)]);
   } else {
     Serial.print(F("none"));
   }
@@ -270,6 +369,9 @@ void publishCompletedScan() {
   }
 }
 
+// SCHEDULER: loop() repeatedly services these short polling/heartbeat steps.
+// Close this sensor attempt: disable the mux, publish if it was the last zone,
+// advance the index, and schedule the guard interval from the supplied millis().
 void finishCurrentSensor(uint32_t now) {
   disableAllMuxChannels();
 
@@ -283,6 +385,9 @@ void finishCurrentSensor(uint32_t now) {
   phaseDeadlineMs = now + Config::kInterSensorGuardMs;
 }
 
+// Advance at most one polling phase using the supplied millis() timestamp.
+// Conversion/guard waits use deadlines, but Wire and Serial calls can still
+// block; this sketch configures no board-specific I2C timeout or recovery.
 void serviceSensorPolling(uint32_t now) {
   switch (pollPhase) {
     case PollPhase::kStartMeasurement:
@@ -315,33 +420,51 @@ void serviceSensorPolling(uint32_t now) {
   }
 }
 
+// Toggle the enabled heartbeat output when due, then schedule from now.
+// Shows that loop() is running, not that measurements are valid. Missed toggles
+// are not replayed; default zero deadline means the first loop drives the pin HIGH.
 void serviceHeartbeat(uint32_t now) {
+  if (Config::kHeartbeatPin == Design::kDisabledOutputPin) {
+    return;
+  }
   if (!deadlineReached(now, heartbeatDeadlineMs)) {
     return;
   }
 
   heartbeatState = !heartbeatState;
-  digitalWrite(LED_BUILTIN, heartbeatState ? HIGH : LOW);
-  heartbeatDeadlineMs = now + 500;
+  digitalWrite(Config::kHeartbeatPin, heartbeatState ? HIGH : LOW);
+  heartbeatDeadlineMs = now + Config::kHeartbeatToggleMs;
 }
 
+// ARDUINO ENTRY POINTS.
+// Arduino startup: configure outputs and buses, request mux isolation, and
+// print the CSV header once. No sensor availability check is made here.
 void setup() {
-  pinMode(LED_BUILTIN, OUTPUT);
-  if (Config::kAlarmPin != 255) {
+  if (Config::kHeartbeatPin != Design::kDisabledOutputPin) {
+    pinMode(Config::kHeartbeatPin, OUTPUT);
+  }
+  if (Config::kAlarmPin != Design::kDisabledOutputPin) {
     pinMode(Config::kAlarmPin, OUTPUT);
   }
   setAlarm(false);
 
   Serial.begin(Config::kSerialBaud);
   Wire.begin();
-  Wire.setClock(100000UL);
+  Wire.setClock(Config::kI2cClockHz);
 
   disableAllMuxChannels();
 
-  Serial.println(F("time_ms,front_left_mm,front_right_mm,rear_left_mm,"
-                   "rear_right_mm,nearest_zone,nearest_mm,state"));
+  Serial.print(F("time_ms"));
+  for (uint8_t i = 0; i < Config::kSensorCount; ++i) {
+    Serial.print(',');
+    Serial.print(Config::kZoneLabels[i]);
+    Serial.print(F("_mm"));
+  }
+  Serial.println(F(",nearest_zone,nearest_mm,state"));
 }
 
+// Arduino main loop: sample the clock once and service polling and heartbeat.
+// Add independent work here only if it returns promptly on every invocation.
 void loop() {
   const uint32_t now = millis();
   serviceSensorPolling(now);
