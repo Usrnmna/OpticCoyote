@@ -2,8 +2,6 @@
 
 ## Base ultrasonic connectivity architecture
 
-The user established the following base architecture on 2026-10-02:
-
 ```text
 Raspberry Pi (SBC / USB host, USB-A)
     |
