@@ -1,10 +1,42 @@
 # Project Optic Coyote
 
-This repository contains two four-input components and a separate draft GPIO connection between them. The original sensor and camera programs remain independent; the draft provides an alternative Arduino sketch and a new Pi warning listener.
+## Base ultrasonic connectivity architecture
+
+The user established the following base architecture on 2026-10-02:
+
+```text
+Raspberry Pi (SBC / USB host, USB-A)
+    |
+    | USB-A to USB-C data cable
+    v
+ELEGOO Nano / Arduino-compatible board (USB-C)
+    CH340 USB-to-serial bridge <-> ATmega328P microcontroller
+    5 V, 16 MHz, 32 KB flash
+    |
+    | I2C
+    v
+4 x RCWL-1655 or compatible AJ-SR04M I2C ultrasonic object-detection modules
+```
+
+The specified controller is an **ATmega328P-based Nano**, with a CH340 USB-to-serial bridge. The phrase "arduino style esp32" in the request is interpreted using those explicit part numbers: the controller is ATmega328P, not ESP32. [ELEGOO's Nano specifications](https://eu.elegoo.com/en-be/products/elegoo-nano-v3-0) identify the ATmega328P and CH340 combination. USB-C here is the user-specified board variant; connector type must match the actual board, since Nano variants also exist with other USB connectors.
+
+The Raspberry Pi communicates with the Nano through USB serial. The Nano owns the I2C connection to the four ultrasonic modules. This diagram establishes component roles and communication links; it does not specify the sensor power distribution or constitute a verified electrical schematic.
+
+### Existing implementation and details still to resolve
+
+- **I2C fan-out:** the user confirmed retaining the existing TCA9548A wiring for the Nano firmware: mux address `0x70`, with one RCWL-1655 at `0x57` on each of channels 0-3. Devices with the same fixed address remain isolated on separate channels.
+- **Pi software integration:** the sensor sketch emits distance CSV at 115200 baud only after receiving `START` followed by a line ending. `STOP` stops transmission. The camera selector's USB serial input expects JSON camera commands. The physical USB link alone does not connect those application protocols; a distance receiver or translation step is still needed.
+- **Earlier GPIO draft:** `draft-gpio-link/` documents a separate Arduino-to-Pi GPIO prototype. It is retained for reference and is outside this base USB connectivity path.
+
+The Nano firmware sends a cached four-zone USB packet after every successful sensor reading while streaming. It retains the I2C conversion wait and enforces at least 10 ms after each read before retriggering that same sensor. Pi integration and physical hardware validation remain separate work.
+
+## Existing components
+
+This repository contains two four-input components and a separate draft GPIO connection between them. The sensor and camera programs run independently; the draft provides an alternative Arduino sketch and a Pi warning listener that can feed camera-selection commands to the selector.
 
 | Component | Purpose | Files |
 | --- | --- | --- |
-| Ultrasonic sensing | Poll four RCWL-1655 sensors through an I2C multiplexer and report distances over serial. | [`optic_coyote_ultrasonic/`](optic_coyote_ultrasonic/) |
+| Ultrasonic sensing | Poll four RCWL-1655 or compatible AJ-SR04M I2C sensors through an I2C multiplexer and report distances over serial. | [`optic_coyote_ultrasonic/`](optic_coyote_ultrasonic/) |
 | AHD camera selection | Show one of four AHD cameras on a Raspberry Pi HDMI display, selected through GPIO, USB serial, or standard input. | [`rpi-ahd-selector/`](rpi-ahd-selector/) |
 | Draft GPIO connection | Send the nearest warning's camera number from Arduino; receive it in a separate Pi listener. | [`draft-gpio-link/`](draft-gpio-link/) |
 
@@ -12,7 +44,7 @@ Start with the [manual review and adjustment guide](#manual-review-and-adjustmen
 
 ## Draft Arduino-to-Pi GPIO connection
 
-This draft establishes a local wired connection. It adds no network communication or recording. **The existing files in `rpi-ahd-selector/`, including its configuration, are unchanged.** The original ultrasonic sketch is also unchanged; upload the new standalone sketch instead when testing the connection.
+This draft establishes a local wired connection with no network communication or recording. Upload its standalone Arduino sketch instead of the sensor-only sketch, then run the Pi listener. The listener can report camera numbers by itself or send JSON commands through the camera selector's standard input.
 
 The Pi listener must already be running to read GPIO. A wire changing level does not itself launch a Linux program. Start the listener once using the command below; it then reacts to incoming warnings until stopped. Automatic boot startup and launching a new process for each warning are outside this draft.
 
@@ -20,13 +52,13 @@ The Pi listener must already be running to read GPIO. A wire changing level does
 
 | File | Review and edit here |
 | --- | --- |
-| [`arduino_camera_warning.ino`](draft-gpio-link/arduino_camera_warning/arduino_camera_warning.ino) | `Config` contains the existing sensor settings. `CameraLink` contains output pins and the sensor-to-camera map. `setupCameraLink()` initializes outputs; `publishCameraWarning()` updates them from `publishCompletedScan()`. This is a self-contained copy, so future sensor changes must be applied to both sketches if both are retained. |
+| [`arduino_camera_warning.ino`](draft-gpio-link/arduino_camera_warning/arduino_camera_warning.ino) | `Config` contains the sensor settings. `CameraLink` contains output pins and the sensor-to-camera map. `setupCameraLink()` initializes outputs; `publishCameraWarning()` updates them from `publishCompletedScan()`. This self-contained reference prototype retains automatic filtered CSV output; it does not implement the Nano USB stream protocol. |
 | [`warning_receiver.py`](draft-gpio-link/warning_receiver.py) | Top-level defaults and `--help` expose GPIO and timing settings. `decode_camera()` reads the logical selection, `StableCamera` filters short transitions, `report_camera()` formats it, and `listen()` owns GPIO setup/cleanup. |
-| [`test_warning_receiver.py`](draft-gpio-link/test_warning_receiver.py) | Software checks for all 16 wire combinations, transitions, cleanup, settings, and command acceptance by the unchanged camera selector. |
+| [`test_warning_receiver.py`](draft-gpio-link/test_warning_receiver.py) | Software checks for all 16 wire combinations, transitions, cleanup, settings, and command acceptance by the camera selector. |
 
 ### Signal and camera mapping
 
-Four signal wires encode one camera number by holding **exactly one** active. This is a held selection, not binary encoding, a pulse count, or a distance measurement. Both WARNING and CRITICAL select the nearest valid sensor's associated camera. Equal distances favor the earlier sensor in the configured order. A complete scan updates the selection, approximately every 420 ms plus processing overhead with default settings.
+Four signal wires encode one camera number by holding **exactly one** active. This is a held selection, not binary encoding, a pulse count, or a distance measurement. Both WARNING and CRITICAL select the nearest valid sensor's associated camera. Equal distances favor the earlier sensor in the configured order. A complete scan updates the selection, approximately every 420 ms plus processing overhead with default settings when all triggers succeed. Failed triggers skip the measurement wait.
 
 | Sensor zone | Camera number | Arduino output | Pi BCM input | Pi physical header pin |
 | --- | --- | --- | --- | --- |
@@ -36,6 +68,8 @@ Four signal wires encode one camera number by holding **exactly one** active. Th
 | rear_right | 4 | D7 | GPIO23 | 16 |
 
 Camera numbers refer to entries 1-4 in the existing camera configuration's `sources` list. Edit `CameraLink::kCameraForSensor` to match where the physical cameras actually face. Multiple zones may share a camera. The output pins always remain ordered camera 1, 2, 3, 4. Pins D4-D7 assume a classic Uno/Nano; check availability on your actual Arduino board.
+
+At startup, `cameraLinkSettingsValid()` checks that output pins are distinct, within the board's digital-pin range, and do not overlap serial pins 0/1, SDA/SCL, alarm, or heartbeat. Each sensor must map to camera 1-4. Invalid settings print `ERROR: check CameraLink pins and sensor-to-camera map` and halt before GPIO setup or measurements. Valid settings initialize all camera outputs LOW. On a selection change, the sketch clears every output before setting the selected output HIGH; repeated selections do not rewrite the pins.
 
 The default listener prints a number on each stable change:
 
@@ -71,9 +105,9 @@ Wire with power removed. Before attaching the signal inputs to the Pi, power the
 
 ### Upload and run the standalone draft
 
-1. Open [`draft-gpio-link/arduino_camera_warning/arduino_camera_warning.ino`](draft-gpio-link/arduino_camera_warning/arduino_camera_warning.ino) in Arduino IDE. Choose your board and port; upload this sketch **instead of** the original. It requires only the board's standard `Wire` library. Sensor wiring and CSV output remain as documented below.
+1. Open [`draft-gpio-link/arduino_camera_warning/arduino_camera_warning.ino`](draft-gpio-link/arduino_camera_warning/arduino_camera_warning.ino) in Arduino IDE. Choose your board and port; upload this sketch **instead of** the original. It requires only the board's standard `Wire` library. Sensor wiring remains as documented below. This older standalone draft streams filtered CSV automatically at boot; it does not implement the Nano firmware's `START`/`STOP` commands or polling interval setting.
 2. Copy this project to the Pi, for example `~/ProjectOpticCoyote`. Provide `python3-gpiozero` and `python3-lgpio` using the existing Pi installation instructions, or provision packages offline. The receiver uses [GPIO Zero's input device API](https://gpiozero.readthedocs.io/en/stable/api_input.html#digitalinputdevice) and [lgpio pin factory](https://gpiozero.readthedocs.io/en/stable/api_pins.html#lgpio).
-3. Start the new listener from a Pi terminal:
+3. Start the listener from a Pi terminal:
 
 ```sh
 cd ~/ProjectOpticCoyote
@@ -88,7 +122,20 @@ To change wiring or timing without editing Python:
 python3 draft-gpio-link/warning_receiver.py --pins 17 27 22 23 --debounce-seconds 0.05
 ```
 
-### Optional connection to the unchanged camera program
+### Receiver options
+
+Run `python3 draft-gpio-link/warning_receiver.py --help` from the project root for the command-line interface.
+
+| Option | Default | Behavior |
+| --- | --- | --- |
+| `--pins BCM BCM BCM BCM` | `17 27 22 23` | Four distinct BCM numbers in 0-27, ordered camera 1-4; check board availability separately. |
+| `--sample-seconds` | `0.01` | Finite polling interval from 0.001 to 1 second. |
+| `--debounce-seconds` | `0.03` | Finite stable-state interval from 0 to 5 seconds. Zero accepts the current state on its first sample. |
+| `--active-high` | Off | Use HIGH-active inputs with pull-downs; requires a compatible interface instead of the documented NPN circuit. |
+| `--selector-json` | Off | Emit JSON for camera 1-4 only; suppress clear/conflict commands. |
+| `--simulate STATE ...` | Off | Immediately report supplied values from -1 through 4 without GPIO or debounce; repeated values are printed too. |
+
+### Optional connection to the camera program
 
 After the standalone wiring test, pipe the listener's optional JSON output into the existing selector's standard input:
 
@@ -97,7 +144,7 @@ cd ~/ProjectOpticCoyote
 python3 draft-gpio-link/warning_receiver.py --selector-json | python3 rpi-ahd-selector/selector.py
 ```
 
-The receiver sends commands such as `{"camera": 2}` only for valid warnings. Clear or conflicting inputs send no camera command; the existing selector keeps displaying its last selected camera. This uses the existing camera interface without changing its code or configuration. The supplied camera configuration already has `gpio_pins: []` and `serial_port: null`. Keep those settings for this test, and stop any other running selector instance first: only the draft listener should own these GPIO inputs. Capture device configuration and video dependencies still need to match your installation.
+The receiver sends commands such as `{"camera": 2}` only for valid warnings. Clear or conflicting inputs send no camera command; the existing selector keeps displaying its last selected camera. The pipe uses the selector's standard-input interface. The supplied camera configuration already has `gpio_pins: []` and `serial_port: null`. Keep those settings for this test, and stop any other running selector instance first: only the draft listener should own these GPIO inputs. Capture device configuration and video dependencies still need to match your installation.
 
 Use Ctrl+C in the foreground terminal to stop both programs. If the listener exits alone, the existing selector deliberately continues displaying its last camera after input closes; stop it separately if needed. This draft does not supervise the camera process or automatically restart either program.
 
@@ -113,22 +160,29 @@ python3 draft-gpio-link/warning_receiver.py --selector-json --simulate 0 1 2 3 4
 
 Simulation checks output formatting only; it does not read GPIO or exercise timing. On hardware, test clear startup, an object in each zone, overlapping warnings, warning removal, Arduino reset, and receiver restart during a held warning. Compare Arduino CSV `nearest_zone` with the Pi camera number. In camera mode, verify each number displays the intended physical camera. Expect sensor scan/filter delay plus GPIO debounce; software timing does not establish actual end-to-end response time.
 
-Validation for this draft: all 11 new receiver tests and all 35 existing camera tests passed. The draft Arduino sketch compiled for `arduino:avr:uno` with Arduino AVR core 1.8.8, using 6116 bytes flash and 528 bytes RAM. The original Arduino sketch and all existing camera source/configuration files were verified unchanged by SHA-256 checksums. The draft has not been uploaded or tested with Arduino, Pi GPIO, sensor, or AHD hardware. Select your actual target board and repeat the build and electrical checks before use.
+The receiver tests use simulated inputs and fake GPIO resources. They cover decoding, debounce transitions, output formatting, selector command acceptance, argument validation, and cleanup. They do not validate Arduino firmware execution, electrical behavior, sensor response, or live camera switching. Compile the draft for your actual board and perform the wiring checks before use.
 
 ## Ultrasonic sensing (Arduino)
 
-This Arduino sketch polls four fixed-address RCWL-1655 ultrasonic sensors through a TCA9548A I2C multiplexer. It reads one sensor at a time, applies a three-reading median filter, finds the nearest object, drives an alarm output, and publishes one CSV record per complete scan.
+See the [Nano pinout and interface reference](docs/nano-ultrasonic-pinout.md)
+for a text wiring graph, pin connections, power notes, and USB commands.
+
+This Nano sketch polls four fixed-address RCWL-1655 or compatible AJ-SR04M I2C ultrasonic sensors through a TCA9548A I2C multiplexer. It reads one sensor at a time and, when commanded to stream, publishes all four sensors' cached distances in one CSV record per successful sensor reading. A separate three-reading median filter supplies nearest-object and alarm decisions.
 
 ### Required hardware
 
 - One Arduino-compatible controller
-- Four RCWL-1655 modules configured for I2C mode
+- Four RCWL-1655 or compatible AJ-SR04M modules configured for I2C mode (see below)
 - One TCA9548A I2C multiplexer at its default `0x70` address
 - A regulated supply appropriate for the Arduino logic voltage
 - I2C pull-up resistors if they are not already present on the TCA9548A breakout
 - One `0.1 uF` bypass capacitor at each sensor, plus a bulk `10-47 uF` capacitor near the power distribution point
 
 ### Sensor configuration
+
+**AJ-SR04M interchangeability:** an AJ-SR04M variant supporting the same I2C protocol can replace an RCWL-1655 on any mux channel, including in a mixed set, without a firmware change. The required operations are 7-bit address `0x57`, write `0x01` to trigger a measurement, wait for conversion (the sketch defaults to `100 ms`), then read three bytes containing a big-endian distance in micrometres and divide by `1000` for millimetres. The same polling, per-sensor cooldown, filtering, START/STOP commands, and cached CSV reporting apply.
+
+Compatibility depends on the exact AJ-SR04M board revision supporting those operations; its model name alone does not establish I2C support. Confirm its mode-selection setting, SCL/SDA pins, supply/logic levels, measurement time, retrigger limits, and distance range against that board's documentation. The RCWL-1655 R7 setting below is not an AJ-SR04M mode-setting specification. AJ-SR04M interchangeability has not been bench-tested in this project.
 
 Install `100 kOhm` at the RCWL-1655 `R7` position to select I2C mode. The four sensor signals are wired to separate mux channels:
 
@@ -143,11 +197,12 @@ The TCA9548A upstream `SCL` and `SDA` connect to the Arduino's hardware I2C pins
 
 ### Build and upload
 
-Open [`optic_coyote_ultrasonic/optic_coyote_ultrasonic.ino`](optic_coyote_ultrasonic/optic_coyote_ultrasonic.ino) in the Arduino IDE, choose the correct board and serial port, then upload it. The sketch only needs the standard `Wire` library.
+Open [`optic_coyote_ultrasonic/optic_coyote_ultrasonic.ino`](optic_coyote_ultrasonic/optic_coyote_ultrasonic.ino) in the Arduino IDE, choose **Arduino Nano**, **ATmega328P**, and the board's serial port, then upload it. If your Nano has the older bootloader, select **ATmega328P (Old Bootloader)**. The sketch only needs the standard `Wire` library. Nano I2C pins are **A4 = SDA** and **A5 = SCL**, connected to the mux upstream pins.
 
 The defaults suit a classic Arduino Uno/Nano:
 
 - Serial rate: `115200`
+- Requested minimum full-round interval: `400 ms`, edited with `Config::kPollingIntervalMs`; USB packets are sent per successful reading
 - Alarm output: digital pin `8`, active high
 - Status heartbeat: built-in LED
 - TCA9548A channels: `0`, `1`, `2`, `3`
@@ -159,30 +214,52 @@ All of these values are grouped in the `Config` namespace near the top of the sk
 
 ### Serial output
 
-The program prints a header followed by CSV records:
+Open USB serial at **115200 baud, 8N1**. The program starts silent, including no CSV header. Send uppercase `START` terminated by LF, CR, or CRLF (in Serial Monitor, select a line-ending option). It prints a header and then one record for every successful sensor read, including a measurement already in progress when START arrives. Send `STOP` with a line ending to stop requesting records; an already-started line finishes to preserve CSV framing, and buffered bytes may still arrive. Repeated `START` while streaming has no effect. Unknown, oversized, and incomplete commands do not start streaming. After a board reset, send `START` again; opening the USB port can reset a Nano, so allow its bootloader to finish before sending commands.
+
+Example output after `START`:
 
 ```text
 time_ms,front_left_mm,front_right_mm,rear_left_mm,rear_right_mm,nearest_zone,nearest_mm,state
-1680,742,515,1204,980,front_right,515,WARNING
-2100,738,509,1198,977,front_right,509,WARNING
+100,742,-1,-1,-1,front_left,742,CLEAR
+210,742,515,-1,-1,front_right,515,WARNING
+320,742,515,1204,-1,front_right,515,WARNING
+430,742,515,1204,980,front_right,515,WARNING
 ```
 
-An invalid, missing, or out-of-range sensor is reported as `-1` and excluded from nearest-object selection. Possible system states are `CLEAR`, `WARNING`, `CRITICAL`, and `NO_VALID_SENSORS`. `CLEAR` describes the valid readings only: other sensors may be invalid. A reading below the configured minimum range is invalid, not automatically `CRITICAL`.
+The four distance columns hold each sensor's latest successful, unfiltered integer millimetres, in mux channel order 0-3. Each successful read replaces only that sensor's cache and requests a packet with all four values, even if the distance is unchanged or no other sensor has responded. A sensor with no successful reading since reset is `-1`. Missing, incomplete, or out-of-range results preserve its last successful value and do not generate a packet. Caches survive STOP/START and clear on reset. Values may be old indefinitely; this eight-column format does not include per-sensor ages or identify which sensor updated.
 
-The alarm output is on for both `WARNING` and `CRITICAL`, and off for `CLEAR` and `NO_VALID_SENSORS`. It updates once per completed scan. Error handling retains the sensor's earlier filter samples, so its first valid reading after recovery can still be influenced by pre-error distances. This is prototype reporting behavior; no motor-stop action or separate fault alarm is implemented.
+`nearest_zone`, `nearest_mm`, and `state` use filtered readings from sensors whose latest attempt succeeded. They may differ from the raw cached distance columns, which can include failed sensors' older values. States are `CLEAR`, `WARNING`, `CRITICAL`, and `NO_VALID_SENSORS`. The accepted range remains 200-5000 mm; an out-of-range result is invalid, not automatically `CRITICAL`.
+
+The alarm updates after every attempt, activating for `WARNING` or `CRITICAL`. Failed sensors are excluded from alarm decisions, while earlier successful filter samples are retained for recovery. With no valid sensors, the alarm turns off; because failed attempts send no packet, an all-failed condition does not produce a `NO_VALID_SENSORS` row. There is no separate fault alarm or motor-stop action.
+
+`START`/`STOP` control USB transmission only. Polling, caching, heartbeat, and alarm decisions continue while silent. After START, the next successful read sends a packet without waiting for the rest of the round. A packet is one CSV line ending in CRLF; the USB host must accumulate bytes through the newline because transport reads can split or combine lines.
+
+The sender freezes each packet before queuing its bytes and uses only available UART space. New captured readings during cooldown or transmission remain pending. After the current frame is fully queued, the next loop sends the latest cached set if a reading is pending or the four distances differ from the previous queued snapshot. Finishing an older packet never clears newer pending readings. Under sustained backpressure, intermediate pending readings merge into the latest value per sensor; this is not an unbounded sample history. An unchanged successful reading still requests a packet. "Queued" means accepted by the Nano UART, not acknowledged by the USB host. STOP cancels pending/unstarted frames, finishes any partly queued line, and a subsequent START places its header after that line.
+
+This protects values already captured by the Nano. The existing I2C mode still reads after its conversion wait and does not capture unsolicited acoustic echoes during cooldown.
 
 ### Timing and control integration
 
-The sketch uses a non-blocking state machine instead of `delay()`. A measurement is triggered with command `0x01`, read after 100 ms, and converted from the returned 24-bit micrometre value to millimetres. The mux channel is then disabled before the next sensor is selected.
+The Nano triggers one RCWL-1655 at a time with I2C command `0x01`, waits at least 100 ms, then reads the three-byte micrometre result and converts it to millimetres. The module generates its own **40 kHz acoustic burst**; 40 kHz is not the trigger repetition rate or the I2C bus clock. The existing I2C interface does not provide an implemented early-echo notification: these are pushes on completed I2C reads, not interrupts at the instant the echo reaches the transducer.
 
-One complete four-sensor scan takes about 420 ms with the conservative default timing, plus I2C and serial processing overhead. Application logic can run alongside the scanner by adding non-blocking work to `loop()`. The scheduling uses no `delay()`, but the underlying `Wire` transactions and serial writes are synchronous and can block. Any future motion controller needs its own tested response to critical readings, invalid sensors, and delayed scans.
+After the read transaction and mux isolation complete, the Nano records a **10 ms cooldown for that sensor only**. The cooldown uses a fresh clock reading so time spent inside I2C cannot consume it. Another eligible sensor can trigger immediately; USB serial has no cooldown. Failed attempts also cool only the affected sensor, and polling advances without requiring a successful response.
+
+With all sensors responding and serial keeping up, packets arrive roughly every 100 ms plus processing overhead and each sensor is revisited roughly every 400 ms. The configurable minimum full-round interval remains:
+
+```cpp
+constexpr uint32_t kPollingIntervalMs = 400;
+```
+
+Increasing this setting delays the next round, not the packet for a completed read. Lowering it cannot bypass conversion or cooldown waits. `kSensorCooldownMs` must be at least 10; `kMeasurementTimeMs` must be at least 100 for the current I2C protocol. See the [RCWL-1655 datasheet, I2C mode on page 5](https://makerhero.com/img/files/download/RCWL-1655-Datasheet.pdf). The older GPIO draft retains its own timing and reporting behavior.
+
+Scheduling uses no `delay()`. Serial writes are limited to `availableForWrite()` space, so a full UART buffer does not block polling; `Wire` calls remain synchronous and can block. A stuck shared I2C bus can still affect all sensors. Physical timing, acoustic interference, and recovery require bench testing; application logic added to `loop()` must return promptly.
 
 ### First-power-up checks
 
 1. Power the system with the sensor heads aimed in different directions.
 2. Confirm that the TCA9548A responds at `0x70`.
 3. Confirm that `0x57` appears only after selecting one mux channel.
-4. Watch the Serial Monitor at `115200` baud.
+4. Open Serial Monitor at `115200` baud with a newline setting. Confirm silence after reset, send `START`, and verify a header and packets roughly every 100 ms plus overhead when all sensors return readings; check that one working sensor still reports when the others return no result. Send `STOP`, allow buffered bytes to drain, and confirm silence. Send `START` again to resume.
 5. Move a broad, flat target through each zone and verify its reported direction.
 6. Tune the range and warning constants for the installation.
 
@@ -263,7 +340,7 @@ python3 selector.py
 
 Set `initial_camera` to 1–4 (default 1). Ctrl+C stops the program. Use `--config PATH` for another configuration.
 
-Serial/stdin commands are newline-terminated JSON:
+Serial/stdin commands are newline-terminated JSON objects containing exactly one action:
 
 ```json
 {"inputs":[0,1,0,0]}
@@ -271,7 +348,7 @@ Serial/stdin commands are newline-terminated JSON:
 {"status":true}
 ```
 
-The four inputs correspond to cameras 1–4. One active input selects that camera. All zero holds the previous selection. Multiple active inputs select the lowest numbered camera. Commands are complete snapshots, latch until changed and need no continuous retransmission. Rapid commands coalesce to the latest selection. Invalid commands leave selection unchanged and return an error.
+The four inputs correspond to cameras 1–4. One active input selects that camera. All zero holds the previous selection. Multiple active inputs select the lowest numbered camera. Commands are complete snapshots, latch until changed and need no continuous retransmission. Rapid commands coalesce to the latest selection. Invalid commands leave selection unchanged and return an error. `inputs` accepts four JSON booleans or integer 0/1 values; `camera` requires an integer 1-4 and `status` requires `true`. Blank lines are ignored. Commands may contain at most 1024 bytes before the newline; an oversized line is discarded in full and receives an error when its newline arrives. An incomplete final line is not executed at input EOF.
 
 #### GPIO selection
 
@@ -321,15 +398,15 @@ Before deployment, verify all four real feeds, both GPIO and serial, simultaneou
 
 | File | What to review or change |
 | --- | --- |
-| [`README.md`](README.md) | Setup, settings reference, behavior, and checks. This is the shared guide for both programs. |
-| [`optic_coyote_ultrasonic.ino`](optic_coyote_ultrasonic/optic_coyote_ultrasonic.ino) | Arduino program. Start at `Config`, then read `setup()`, `loop()`, `serviceSensorPolling()`, and `publishCompletedScan()`. |
+| [`README.md`](README.md) | Setup, settings reference, behavior, and checks. This is the shared guide for the sensor sketch, camera selector, and draft GPIO connection. |
+| [`optic_coyote_ultrasonic.ino`](optic_coyote_ultrasonic/optic_coyote_ultrasonic.ino) | Arduino program. Start at `Config`, then read `setup()`, `loop()`, `serviceSensorPolling()`, and `serviceSerialOutput()`. |
 | [`config.json`](rpi-ahd-selector/config.json) | Camera sources, display output, GPIO, serial, and timing settings. Edit this first for installation changes. |
 | [`selector.py`](rpi-ahd-selector/selector.py) | Camera program. Start with the module overview, `main()`, and `validate()`, then follow `player()` or the relevant input function. |
 | [`control.py`](rpi-ahd-selector/control.py) | Sender helper. Read `build_parser()`, `make_message()`, `send_serial_command()`, then `main()`. |
 | [`test_selector.py`](rpi-ahd-selector/test_selector.py) | Examples and automated checks for commands, configuration, switching, GPIO, and reconnects. Fake processes/ports replace hardware. |
 | [`test_control.py`](rpi-ahd-selector/test_control.py) | Sender options, output JSON, acknowledgement validation, and error handling using a fake serial port. |
 
-The original two components are independent. Arduino CSV distance reports are **not** camera-selection JSON commands. The separate [draft GPIO connection](#draft-arduino-to-pi-gpio-connection) supplies an alternative Arduino sketch and a Pi listener; its optional JSON output uses the camera program's existing input interface.
+The sensor-only sketch and camera selector are independent. Arduino CSV distance reports are **not** camera-selection JSON commands. The separate [draft GPIO connection](#draft-arduino-to-pi-gpio-connection) supplies an alternative Arduino sketch and a Pi listener; its optional JSON output uses the camera program's existing input interface.
 
 ### Camera settings reference
 
@@ -379,14 +456,15 @@ Edit only the `Config` section for ordinary installation tuning, then compile an
 
 | Setting | Default | Meaning and editing constraints |
 | --- | --- | --- |
+| `kPollingIntervalMs` | `400` | Nano USB sketch: minimum milliseconds between round starts, positive and below 2147483648. Four sequential I2C conversions need about 400 ms plus overhead. |
 | `kMuxAddress` | `0x70` | 7-bit mux address; match the physical address straps. |
 | `kSensorAddress` | `0x57` | RCWL-1655's fixed 7-bit address; changing a number does not readdress the sensors. |
 | `kI2cClockHz` | `100000` | Positive I2C bus rate in Hz; choose a rate supported by the board, sensors, and wiring. |
 | `kSensorCount` | `4` | Fixed program layout, checked at compile time. Supporting another count requires code changes. |
 | `kMuxChannels` | `{0, 1, 2, 3}` | Exactly four distinct physical mux channels, each 0–7. |
-| `kZoneLabels` | `front_left`, `front_right`, `rear_left`, `rear_right` | Exactly four labels. Keep them nonempty and free of commas/newlines; CSV escaping is not implemented. The header gains `_mm` automatically. |
-| `kMeasurementTimeMs` | `100` | Wait between trigger and read in milliseconds, positive 16-bit integer. Verify conversion timing before reducing it. |
-| `kInterSensorGuardMs` | `5` | Pause between sensors in milliseconds, 8-bit integer 0–255. |
+| `kZoneLabels` | `front_left`, `front_right`, `rear_left`, `rear_right` | Exactly four labels. Keep them nonempty and free of commas/newlines and at most 23 characters; CSV escaping is not implemented. The header gains `_mm` automatically. |
+| `kMeasurementTimeMs` | `100` | Wait between trigger and read in milliseconds. Nano firmware enforces at least 100 ms for the RCWL-1655 I2C protocol. |
+| `kSensorCooldownMs` | `10` | Minimum delay before retriggering the same sensor, 10-255 ms. Does not delay USB or other sensors. The separate GPIO draft retains its own guard setting. |
 | `kMinimumDistanceMm` / `kMaximumDistanceMm` | `200` / `5000` | Inclusive accepted range in millimetres, 16-bit unsigned values. Minimum must not exceed maximum. Outside readings become invalid. |
 | `kWarningDistanceMm` / `kCriticalDistanceMm` | `600` / `300` | Inclusive thresholds in millimetres, 16-bit unsigned values. Critical must not exceed warning. For both states to be reachable, use `minimum <= critical < warning <= maximum`; equal thresholds skip `WARNING`. |
 | `kAlarmPin` | `8` | Board digital pin; `255` disables it. Must differ from an enabled heartbeat pin. |
@@ -395,7 +473,7 @@ Edit only the `Config` section for ordinary installation tuning, then compile an
 | `kHeartbeatToggleMs` | `500` | Milliseconds between LED toggles, greater than 0 and below 2147483648. Two toggles make one full cycle. |
 | `kSerialBaud` | `115200` | Positive serial bits per second; match the Serial Monitor/receiver and board capabilities. |
 
-Compile-time assertions catch array lengths, duplicate/out-of-range channels, inverted thresholds/ranges, zero timing/rates, and output pin collisions. They do not validate physical wiring, supported pins/rates, or label text. Keep edits within the declared C++ integer types.
+Compile-time assertions catch array lengths, duplicate/out-of-range channels, inverted thresholds/ranges, invalid timing/rates, and output pin collisions. They do not validate physical wiring, supported pins/rates, or label text. Keep edits within the declared C++ integer types.
 
 `Design` contains protocol and algorithm constants, not ordinary tuning values: the one-shot command, three-byte response, micrometre conversion, three-sample history, and disabled-pin marker. In particular, changing `kHistorySize` alone does not implement a different filter. The filter uses the first sample directly, averages the first two, and then uses the median of the latest three successful readings.
 
@@ -405,8 +483,10 @@ Comments above each function describe its inputs, outputs, and hardware/state ch
 
 | Function | Use/action |
 | --- | --- |
-| `setup()` | Configure outputs, serial and I2C; disable mux channels; print the CSV header once. |
-| `loop()` | Read the current clock and service polling/heartbeat repeatedly. Add short non-blocking application work here. |
+| `setup()` | Configure outputs, serial and I2C; disable mux channels; remain serial-silent until `START`. |
+| `loop()` | Service serial commands, then polling and heartbeat repeatedly. Add short non-blocking application work here. |
+| `serviceSerialCommands()` | Parse bounded uppercase `START`/`STOP` lines without dynamic memory; discard invalid lines. |
+| `prepareSerialPacket()` | Freeze a complete header/data snapshot; consume only readings represented in that snapshot. |
 | `deadlineReached(now, deadline)` | Compare millisecond deadlines with counter wraparound handling. |
 | `selectMuxChannel(channel)` | Connect one sensor's mux channel; return whether the I2C write succeeded. |
 | `disableAllMuxChannels()` | Request disconnection of all channels. The write result is not checked. |
@@ -417,10 +497,12 @@ Comments above each function describe its inputs, outputs, and hardware/state ch
 | `recordFailedReading(sensorIndex)` | Mark the reading invalid and increase its diagnostic error count, retaining earlier filter samples. |
 | `findNearestSensor()` | Return the nearest valid sensor index, or `-1`; equal distances prefer the earlier configured zone. |
 | `setAlarm(active)` | Apply configured alarm polarity, or do nothing when disabled. |
-| `printDistanceOrInvalid(sensor)` | Print the filtered millimetres or `-1` to serial. |
-| `publishCompletedScan()` | Determine nearest/state, update alarm, and print a complete CSV row. This is the place to inspect or extend scan-level decisions. |
-| `finishCurrentSensor(now)` | Disable mux channels, publish after the last sensor, advance to the next, and schedule the guard interval. |
-| `serviceSensorPolling(now)` | Advance through trigger, wait/read, and guard phases without using `delay()`. |
+| `cachedDistance(index)` | Return the latest successful raw millimetres, or -1 if unavailable. |
+| `serviceSerialOutput()` | Queue available bytes without waiting; finish the current snapshot, then send pending or changed values. |
+| `distancesChangedSinceSend()` | Compare all four cached distances with the last fully queued data snapshot. |
+| `updateAlarm()` | Update the alarm after each sensor attempt, independent of TX progress. |
+| `finishCurrentSensor()` | Disable mux, start that sensor's cooldown, update the alarm, and advance to another sensor. |
+| `serviceSensorPolling(now)` | Trigger eligible sensors and wait/read without delay(); skip sensors still cooling down. |
 | `serviceHeartbeat(now)` | Toggle the enabled status output when its deadline arrives. This indicates loop activity, not sensor health. |
 
 ### Function map: camera selector and sender
@@ -477,4 +559,36 @@ The automated tests use fake capture processes, clocks, GPIO buttons, and serial
 
 For live Pi checks, start with `--demo --headless`, then `--demo` with HDMI, then the real cameras and configured controls. These modes still need GStreamer and any libraries/devices required by enabled controls. Watch actual frames and inputs: an `ok: true` command reply, running process, or heartbeat LED alone does not establish system health.
 
-Validation completed during this readability review: 35 Python tests passed, and the supplied configuration passed `--check-config`. The Arduino sketch compiled for an Uno using the installed Arduino AVR core 1.8.8 (5836 bytes flash, 519 bytes RAM). No board was uploaded/flashed, and no physical sensor, camera, Pi display, GPIO, or serial connection was exercised.
+### Verify all components from the project root
+
+The Python checks use the standard library and do not require attached devices or the Pi runtime packages:
+
+```sh
+python3 -m unittest discover -s rpi-ahd-selector -p "test_*.py" -v
+python3 -m unittest discover -s draft-gpio-link -p "test_*.py" -v
+python3 rpi-ahd-selector/selector.py --check-config
+python3 rpi-ahd-selector/selector.py --demo --headless --check-config
+python3 rpi-ahd-selector/control.py --camera 2
+python3 draft-gpio-link/warning_receiver.py --simulate 0 1 2 3 4 0 -1
+python3 draft-gpio-link/warning_receiver.py --selector-json --simulate 0 1 2 3 4 0
+```
+
+Run both explicit discovery commands: the tests live in separate component directories. The selector and sender suite covers command validation/framing, configuration defaults and limits, pipeline construction, switching/retry cleanup, GPIO arbitration, serial reconnects, and sender acknowledgements. The receiver suite covers the draft link separately. Python tests do not compile either Arduino sketch.
+
+Build each sketch separately in Arduino IDE with the target board selected. With Arduino CLI and the matching board core already installed, a classic Nano build from the project root is:
+
+```sh
+arduino-cli compile --fqbn arduino:avr:nano:cpu=atmega328 optic_coyote_ultrasonic
+arduino-cli compile --fqbn arduino:avr:nano:cpu=atmega328 draft-gpio-link/arduino_camera_warning
+```
+
+Use your board's FQBN when it differs. These commands compile without uploading. Firmware compilation and software tests do not establish physical sensor accuracy, electrical compatibility, GPIO/serial operation, camera capture, HDMI output, or end-to-end response time. Those require the hardware checks above.
+
+The Nano stream contract also has a host simulation that includes the actual sketch and substitutes the clock, serial port, and I2C devices. With a C++ compiler installed, run from the project root (Windows MinGW example):
+
+```powershell
+g++ -std=c++11 -Wall -Wextra -Werror -static -I tests/nano tests/nano/test_serial.cpp -o "$env:TEMP/optic-coyote-nano-test.exe"
+if ($LASTEXITCODE -eq 0) { & "$env:TEMP/optic-coyote-nano-test.exe" }
+```
+
+It checks silent boot, complete command framing, start/stop/restart, per-reading cached packets, each sensor responding alone, trigger/read/partial/out-of-range failures, recovery, minimum conversion waits, per-sensor cooldown, clock rollover, stalled/partial serial writes, changed-value follow-up, sends during cooldown, and STOP/START mid-packet. This simulation does not exercise the Nano hardware, its bootloader, USB buffering, or acoustic interference.
