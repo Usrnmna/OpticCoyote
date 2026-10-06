@@ -1,7 +1,15 @@
 #include <Wire.h>
+#include <string.h>
+#include <stdio.h>
 
 /*
-  Four RCWL-1655 ultrasonic sensors through a TCA9548A I2C multiplexer.
+  Four RCWL-1655 or compatible AJ-SR04M I2C ultrasonic sensors through a
+  TCA9548A multiplexer. Either type may occupy any channel.
+
+  AJ-SR04M compatibility requires address 0x57, trigger byte 0x01, and a
+  three-byte big-endian micrometre result. Verify the exact board's I2C mode,
+  pin labels, voltage, timing, and range; model name alone is insufficient.
+  Both types use the same polling, cooldown, filtering, and USB operations.
 
   Target: Arduino-compatible board using the standard Wire library.
   RCWL-1655 I2C address: 0x57 (fixed)
@@ -11,9 +19,12 @@
     RCWL Trig/RX/SCL pin -> TCA9548A channel SCL
     RCWL Echo/TX/SDA pin -> TCA9548A channel SDA
 
-  Serial output is one CSV record per completed four-sensor scan.
+  USB serial is silent at boot. Send START followed by a newline to stream;
+  send STOP followed by a newline to stop. Commands use 115200 baud, 8N1.
+  Each successful read requests a cached four-zone CSV record. Pending updates
+  merge to the latest values while a previous packet is still being queued.
   Start manual review with Config, then serviceSensorPolling(), then
-  publishCompletedScan(). Function comments describe inputs and side effects.
+  serviceSerialOutput(). Function comments describe inputs and side effects.
 */
 
 // Fixed protocol/filter design. Changing these requires reviewing the matching
@@ -25,10 +36,18 @@ constexpr uint8_t kDistanceByteCount = 3;  // Big-endian 24-bit micrometres.
 constexpr uint32_t kMicrometresPerMillimetre = 1000UL;
 constexpr uint8_t kHistorySize = 3;  // medianOfHistory() implements three slots.
 constexpr uint8_t kDisabledOutputPin = 255;
+constexpr uint16_t kSerialPacketCapacity = 192;
 }  // namespace Design
 
 // INSTALLATION SETTINGS: edit this section, then rebuild/upload the sketch.
 namespace Config {
+// POLLING INTERVAL (milliseconds): requested minimum time between scan starts.
+// EDIT HERE to change the requested rate. 400 ms is about 2.5 scans/second.
+// HARDWARE LIMIT: four sequential I2C conversions need about 400 ms.
+// Faster requested intervals cannot shorten conversions; scans never overlap
+// and old scans are never retransmitted to imitate a faster measurement rate.
+constexpr uint32_t kPollingIntervalMs = 400;
+
 // I2C addresses are 7-bit. The sensor address is fixed for the RCWL-1655;
 // change the mux address only to match its physical A0/A1/A2 address straps.
 constexpr uint8_t kMuxAddress = 0x70;
@@ -40,21 +59,25 @@ constexpr uint8_t kSensorCount = 4;
 
 // Matching indexes define the zone, physical mux port, and CSV column order.
 // Channels must be distinct, in 0..7. Labels must be nonempty and contain no
-// commas/newlines. Renaming a label changes its CSV header and nearest_zone.
+// commas/newlines and at most 23 characters to fit the serial packet buffer.
+// Renaming a label changes its CSV header and nearest_zone.
 constexpr uint8_t kMuxChannels[] = {0, 1, 2, 3};
 const char *const kZoneLabels[] = {
     "front_left", "front_right", "rear_left", "rear_right"};
 
-// Milliseconds: wait for one measurement, then pause before the next sensor.
-// The datasheet allows up to 100 ms; verify hardware before reducing this wait.
+// Milliseconds: wait for one I2C measurement.
+// I2C mode requires at least 100 ms after each trigger (datasheet page 5).
 constexpr uint16_t kMeasurementTimeMs = 100;
-constexpr uint8_t kInterSensorGuardMs = 5;
+// Mandatory cooldown before retriggering the SAME sensor; USB never waits for it.
+// Other sensors may trigger while this sensor cools down. The module itself
+// generates the 40 kHz acoustic burst; this is not the I2C clock.
+constexpr uint8_t kSensorCooldownMs = 10;
 
 // Inclusive accepted range in mm. Samples outside it are invalid, not clipped.
 constexpr uint16_t kMinimumDistanceMm = 200;
 constexpr uint16_t kMaximumDistanceMm = 5000;
 
-// Inclusive thresholds in mm, applied to filtered readings at scan completion.
+// Inclusive thresholds in mm, applied to filtered readings after each attempt.
 // WARNING and CRITICAL both activate the same alarm pin; CRITICAL changes CSV.
 constexpr uint16_t kWarningDistanceMm = 600;
 constexpr uint16_t kCriticalDistanceMm = 300;
@@ -93,37 +116,44 @@ static_assert(Config::kMinimumDistanceMm <= Config::kMaximumDistanceMm,
               "Minimum accepted distance must not exceed maximum");
 static_assert(Config::kCriticalDistanceMm <= Config::kWarningDistanceMm,
               "Critical threshold must not exceed warning threshold");
-static_assert(Config::kMeasurementTimeMs > 0 && Config::kI2cClockHz > 0 &&
+static_assert(Config::kMeasurementTimeMs >= 100 && Config::kI2cClockHz > 0 &&
                   Config::kSerialBaud > 0,
-              "Measurement wait and bus/serial rates must be positive");
+              "RCWL-1655 I2C wait must be >=100 ms; bus/serial rates positive");
+static_assert(Config::kSensorCooldownMs >= 10,
+              "Allow at least 10 ms after reading before retriggering that sensor");
 static_assert(Config::kHeartbeatToggleMs > 0 &&
                   Config::kHeartbeatToggleMs < 0x80000000UL,
               "Heartbeat interval must be positive and fit deadline arithmetic");
+static_assert(Config::kPollingIntervalMs > 0 &&
+                  Config::kPollingIntervalMs < 0x80000000UL,
+              "Polling interval must be positive and fit deadline arithmetic");
 static_assert(Config::kAlarmPin == Design::kDisabledOutputPin ||
                   Config::kHeartbeatPin == Design::kDisabledOutputPin ||
                   Config::kAlarmPin != Config::kHeartbeatPin,
               "Alarm and heartbeat must use different enabled pins");
 
 // RUNTIME STATE: no user settings below this point.
-// History contains only successful samples and survives failures. 'valid'
-// describes the latest attempt; an invalid sensor is excluded from decisions.
+// History/cache survive failures. 'valid' describes the latest attempt for
+// alarm decisions; historyCount != 0 means a cached USB reading is available.
 struct SensorState {
   uint16_t historyMm[Design::kHistorySize];
+  uint16_t latestDistanceMm;  // Fresh sample for USB; filtering is alarm-only.
   uint16_t filteredDistanceMm;
   uint8_t historyCount;
   uint8_t historyIndex;
   uint8_t consecutiveErrors;  // Saturates at 255; diagnostic only, not in CSV.
   bool valid;
+  uint32_t cooldownDeadlineMs;
+  bool coolingDown;
 };
 
 SensorState sensors[Config::kSensorCount] = {};  // All readings initially invalid.
 
-// START -> WAIT -> finishCurrentSensor() -> GUARD -> START of next sensor.
-// A failed trigger skips WAIT. A CSV row is published after the fourth attempt.
+// START -> WAIT -> finishCurrentSensor() -> START of next sensor.
+// A failed trigger skips WAIT. Every successful read publishes independently.
 enum class PollPhase : uint8_t {
   kStartMeasurement,
   kWaitForMeasurement,
-  kGuardTime,
 };
 
 PollPhase pollPhase = PollPhase::kStartMeasurement;
@@ -131,6 +161,24 @@ uint8_t currentSensor = 0;
 uint32_t phaseDeadlineMs = 0;
 uint32_t heartbeatDeadlineMs = 0;
 bool heartbeatState = false;
+bool streamingEnabled = false;
+uint32_t nextScanDeadlineMs = 0;
+char serialCommand[6] = {};  // START plus terminator; no dynamic allocation.
+uint8_t serialCommandLength = 0;
+bool discardSerialCommand = false;
+
+// Main-loop-owned TX state: immutable in-flight bytes plus latest pending data.
+// These are not ISR-safe; a future echo ISR must hand samples to the main loop.
+char serialPacket[Design::kSerialPacketCapacity] = {};
+uint16_t serialPacketLength = 0;
+uint16_t serialPacketOffset = 0;
+bool serialHeaderPending = false;
+bool serialReadingPending = false;
+bool serialPacketIsCurrentData = false;
+bool haveSentDistances = false;
+int32_t packetDistances[Config::kSensorCount] = {};
+int32_t sentDistances[Config::kSensorCount] = {};
+
 
 // DEADLINES AND I2C: select one sensor, trigger it, then read its result.
 // Return whether a millis() deadline has elapsed, including counter wraparound.
@@ -250,6 +298,7 @@ uint16_t medianOfHistory(const SensorState &sensor) {
 // even after failed attempts, so the first recovered output can include it.
 void recordSuccessfulReading(uint8_t sensorIndex, uint16_t distanceMm) {
   SensorState &sensor = sensors[sensorIndex];
+  sensor.latestDistanceMm = distanceMm;
   sensor.historyMm[sensor.historyIndex] = distanceMm;
   sensor.historyIndex = static_cast<uint8_t>(
       (sensor.historyIndex + 1) % Design::kHistorySize);
@@ -261,11 +310,12 @@ void recordSuccessfulReading(uint8_t sensorIndex, uint16_t distanceMm) {
   sensor.filteredDistanceMm = medianOfHistory(sensor);
   sensor.consecutiveErrors = 0;
   sensor.valid = true;
+  if (streamingEnabled) serialReadingPending = true;
 }
 
 // Invalidate a logical sensor immediately and increment its diagnostic error
-// count. Retain its last filtered distance and history; neither is published
-// while invalid. This does not update the alarm until the scan is completed.
+// count. Retain its last raw distance for USB and its filter history. Failed
+// attempts do not generate packets and are excluded from alarm decisions.
 void recordFailedReading(uint8_t sensorIndex) {
   SensorState &sensor = sensors[sensorIndex];
   if (sensor.consecutiveErrors < 255) {
@@ -296,7 +346,7 @@ int8_t findNearestSensor() {
   return nearest;
 }
 
-// OUTPUTS: one alarm decision and CSV row per completed four-sensor scan.
+// OUTPUTS: update the alarm per attempt and send CSV per successful reading.
 // Drive the configured alarm level for active/inactive, respecting polarity.
 // A disabled pin has no effect; this function does not decide alarm conditions.
 void setAlarm(bool active) {
@@ -309,112 +359,176 @@ void setAlarm(bool active) {
   digitalWrite(Config::kAlarmPin, active ? activeLevel : inactiveLevel);
 }
 
-// Print one CSV distance field: filtered integer mm, or -1 when invalid.
-// Does not print a delimiter or line ending, and does not alter sensor state.
-void printDistanceOrInvalid(const SensorState &sensor) {
-  if (sensor.valid) {
-    Serial.print(sensor.filteredDistanceMm);
-  } else {
-    Serial.print(F("-1"));
-  }
+// Return a cached raw distance, or -1 until this sensor first succeeds.
+int32_t cachedDistance(uint8_t index) {
+  return sensors[index].historyCount ? static_cast<int32_t>(sensors[index].latestDistanceMm) : -1;
 }
 
-// Find the nearest filtered reading, update the alarm, and print one CSV row.
-// Alarm changes occur once per complete scan, not at each individual reading.
-// NO_VALID_SENSORS turns the alarm OFF; sensor failure has no separate alarm.
-// CLEAR can include failed sensors if all remaining valid readings are distant.
-// The four measurements were collected sequentially, not simultaneously.
-void publishCompletedScan() {
+// Update the alarm independently of serial progress, including failed attempts.
+void updateAlarm() {
   const int8_t nearest = findNearestSensor();
-  const bool warning =
-      nearest >= 0 &&
-      sensors[static_cast<uint8_t>(nearest)].filteredDistanceMm <=
-          Config::kWarningDistanceMm;
-  const bool critical =
-      nearest >= 0 &&
-      sensors[static_cast<uint8_t>(nearest)].filteredDistanceMm <=
-          Config::kCriticalDistanceMm;
+  setAlarm(nearest >= 0 &&
+           sensors[static_cast<uint8_t>(nearest)].filteredDistanceMm <=
+               Config::kWarningDistanceMm);
+}
 
-  setAlarm(warning);
-
-  Serial.print(millis());
+// Compare distance values only, not the timestamp (which always changes).
+bool distancesChangedSinceSend() {
+  if (!haveSentDistances) return false;
   for (uint8_t i = 0; i < Config::kSensorCount; ++i) {
-    Serial.print(',');
-    printDistanceOrInvalid(sensors[i]);
+    if (cachedDistance(i) != sentDistances[i]) return true;
   }
+  return false;
+}
 
-  Serial.print(',');
-  if (nearest >= 0) {
-    Serial.print(Config::kZoneLabels[static_cast<uint8_t>(nearest)]);
+// Create a frozen header/data frame only after the preceding frame is queued.
+// Never emit a truncated frame if installation labels exceed the buffer.
+void prepareSerialPacket() {
+  int length = 0;
+  if (serialHeaderPending) {
+    length = snprintf(serialPacket, sizeof(serialPacket),
+        "time_ms,%s_mm,%s_mm,%s_mm,%s_mm,nearest_zone,nearest_mm,state\r\n",
+        Config::kZoneLabels[0], Config::kZoneLabels[1],
+        Config::kZoneLabels[2], Config::kZoneLabels[3]);
   } else {
-    Serial.print(F("none"));
+    for (uint8_t i = 0; i < Config::kSensorCount; ++i) {
+      packetDistances[i] = cachedDistance(i);
+    }
+    const int8_t nearest = findNearestSensor();
+    const int32_t nearestMm = nearest < 0 ? -1 :
+        static_cast<int32_t>(sensors[static_cast<uint8_t>(nearest)].filteredDistanceMm);
+    const char *state = nearest < 0 ? "NO_VALID_SENSORS" :
+        nearestMm <= Config::kCriticalDistanceMm ? "CRITICAL" :
+        nearestMm <= Config::kWarningDistanceMm ? "WARNING" : "CLEAR";
+    length = snprintf(serialPacket, sizeof(serialPacket),
+        "%lu,%ld,%ld,%ld,%ld,%s,%ld,%s\r\n",
+        static_cast<unsigned long>(millis()),
+        static_cast<long>(packetDistances[0]), static_cast<long>(packetDistances[1]),
+        static_cast<long>(packetDistances[2]), static_cast<long>(packetDistances[3]),
+        nearest < 0 ? "none" : Config::kZoneLabels[static_cast<uint8_t>(nearest)],
+        static_cast<long>(nearestMm), state);
   }
+  if (length <= 0 || static_cast<size_t>(length) >= sizeof(serialPacket)) return;
+  serialPacketIsCurrentData = !serialHeaderPending;
+  if (serialHeaderPending) serialHeaderPending = false;
+  else serialReadingPending = false;  // Consume only readings in THIS snapshot.
+  serialPacketLength = static_cast<uint16_t>(length);
+  serialPacketOffset = 0;
+}
 
-  Serial.print(',');
-  if (nearest >= 0) {
-    Serial.print(sensors[static_cast<uint8_t>(nearest)].filteredDistanceMm);
-  } else {
-    Serial.print(F("-1"));
+// Queue only bytes that fit now. A full UART buffer never blocks sensor polling.
+// Completion acknowledges this snapshot, never any newer reading in the cache.
+// "Sent" here means queued to the UART, not acknowledged by the USB host.
+void serviceSerialOutput() {
+  if (serialPacketLength == 0) {
+    if (!streamingEnabled || (!serialHeaderPending && !serialReadingPending &&
+                             !distancesChangedSinceSend())) return;
+    prepareSerialPacket();
   }
+  if (serialPacketLength == 0) return;
+  const int capacity = Serial.availableForWrite();
+  if (capacity <= 0) return;
+  const uint16_t remaining = serialPacketLength - serialPacketOffset;
+  const uint16_t count = capacity < remaining ? static_cast<uint16_t>(capacity) : remaining;
+  serialPacketOffset += Serial.write(
+      reinterpret_cast<const uint8_t *>(serialPacket + serialPacketOffset), count);
+  if (serialPacketOffset != serialPacketLength) return;
+  if (serialPacketIsCurrentData) {
+    memcpy(sentDistances, packetDistances, sizeof(sentDistances));
+    haveSentDistances = true;
+  }
+  serialPacketLength = serialPacketOffset = 0;
+  serialPacketIsCurrentData = false;
+}
 
-  Serial.print(',');
-  if (critical) {
-    Serial.println(F("CRITICAL"));
-  } else if (warning) {
-    Serial.println(F("WARNING"));
-  } else if (nearest >= 0) {
-    Serial.println(F("CLEAR"));
-  } else {
-    Serial.println(F("NO_VALID_SENSORS"));
+// Accept exact uppercase START/STOP terminated by CR, LF, or CRLF.
+// Ignore unknown, binary, and oversized lines in full; a suffix cannot execute.
+// Bound work per loop so a busy host cannot starve sensing.
+void serviceSerialCommands() {
+  for (uint8_t count = 0; count < 32 && Serial.available() > 0; ++count) {
+    const char input = static_cast<char>(Serial.read());
+    if (input == '\r' || input == '\n') {
+      if (!discardSerialCommand) {
+        serialCommand[serialCommandLength] = '\0';
+        if (strcmp(serialCommand, "START") == 0 && !streamingEnabled) {
+          streamingEnabled = true;
+          serialHeaderPending = true;
+          serialReadingPending = false;
+          haveSentDistances = false;
+        } else if (strcmp(serialCommand, "STOP") == 0) {
+          streamingEnabled = false;
+          serialHeaderPending = serialReadingPending = false;
+          serialPacketIsCurrentData = false;
+          haveSentDistances = false;
+          // Finish a partially queued line to preserve CSV framing. Discard an
+          // unstarted line; a later START puts its header after any old suffix.
+          if (serialPacketOffset == 0) serialPacketLength = 0;
+        }
+      }
+      serialCommandLength = 0;
+      discardSerialCommand = false;
+    } else if (!discardSerialCommand) {
+      if (input < 'A' || input > 'Z' ||
+          serialCommandLength >= sizeof(serialCommand) - 1) {
+        discardSerialCommand = true;
+      } else {
+        serialCommand[serialCommandLength++] = input;
+      }
+    }
   }
 }
 
-// SCHEDULER: loop() repeatedly services these short polling/heartbeat steps.
-// Close this sensor attempt: disable the mux, publish if it was the last zone,
-// advance the index, and schedule the guard interval from the supplied millis().
-void finishCurrentSensor(uint32_t now) {
+// Cool only the sensor whose attempt ended, starting AFTER I2C completes.
+// USB output and the next sensor are independent of this cooldown.
+void finishCurrentSensor() {
   disableAllMuxChannels();
-
-  if (currentSensor == Config::kSensorCount - 1) {
-    publishCompletedScan();
-  }
+  sensors[currentSensor].cooldownDeadlineMs = millis() + Config::kSensorCooldownMs;
+  sensors[currentSensor].coolingDown = true;
+  updateAlarm();
 
   currentSensor = static_cast<uint8_t>(
       (currentSensor + 1) % Config::kSensorCount);
-  pollPhase = PollPhase::kGuardTime;
-  phaseDeadlineMs = now + Config::kInterSensorGuardMs;
+  pollPhase = PollPhase::kStartMeasurement;
 }
 
 // Advance at most one polling phase using the supplied millis() timestamp.
-// Conversion/guard waits use deadlines, but Wire and Serial calls can still
-// block; this sketch configures no board-specific I2C timeout or recovery.
+// Conversion/guard waits use deadlines. Wire calls can still block; this
+// sketch configures no board-specific I2C timeout or recovery.
 void serviceSensorPolling(uint32_t now) {
   switch (pollPhase) {
     case PollPhase::kStartMeasurement:
+      if (sensors[currentSensor].coolingDown &&
+          !deadlineReached(now, sensors[currentSensor].cooldownDeadlineMs)) {
+        currentSensor = static_cast<uint8_t>((currentSensor + 1) % Config::kSensorCount);
+        return;
+      }
+      sensors[currentSensor].coolingDown = false;
+      if (currentSensor == 0) {
+        if (!deadlineReached(now, nextScanDeadlineMs)) {
+          return;
+        }
+        nextScanDeadlineMs = now + Config::kPollingIntervalMs;
+      }
       if (startRanging(currentSensor)) {
-        phaseDeadlineMs = now + Config::kMeasurementTimeMs;
+        // Count the conversion wait after the trigger transaction finishes.
+        phaseDeadlineMs = millis() + Config::kMeasurementTimeMs;
         pollPhase = PollPhase::kWaitForMeasurement;
       } else {
         recordFailedReading(currentSensor);
-        finishCurrentSensor(now);
+        finishCurrentSensor();
       }
       break;
 
     case PollPhase::kWaitForMeasurement:
       if (deadlineReached(now, phaseDeadlineMs)) {
         uint16_t distanceMm = 0;
-        if (readDistanceMm(distanceMm)) {
+        const bool readingReturned = readDistanceMm(distanceMm);
+        if (readingReturned) {
           recordSuccessfulReading(currentSensor, distanceMm);
         } else {
           recordFailedReading(currentSensor);
         }
-        finishCurrentSensor(now);
-      }
-      break;
-
-    case PollPhase::kGuardTime:
-      if (deadlineReached(now, phaseDeadlineMs)) {
-        pollPhase = PollPhase::kStartMeasurement;
+        finishCurrentSensor();
       }
       break;
   }
@@ -438,7 +552,7 @@ void serviceHeartbeat(uint32_t now) {
 
 // ARDUINO ENTRY POINTS.
 // Arduino startup: configure outputs and buses, request mux isolation, and
-// print the CSV header once. No sensor availability check is made here.
+// remain silent until START. No sensor availability check is made here.
 void setup() {
   if (Config::kHeartbeatPin != Design::kDisabledOutputPin) {
     pinMode(Config::kHeartbeatPin, OUTPUT);
@@ -453,22 +567,16 @@ void setup() {
   Wire.setClock(Config::kI2cClockHz);
 
   disableAllMuxChannels();
-
-  Serial.print(F("time_ms"));
-  for (uint8_t i = 0; i < Config::kSensorCount; ++i) {
-    Serial.print(',');
-    Serial.print(Config::kZoneLabels[i]);
-    Serial.print(F("_mm"));
-  }
-  Serial.println(F(",nearest_zone,nearest_mm,state"));
 }
 
 // Arduino main loop: sample the clock once and service polling and heartbeat.
 // Add independent work here only if it returns promptly on every invocation.
 void loop() {
+  serviceSerialCommands();
   const uint32_t now = millis();
   serviceSensorPolling(now);
   serviceHeartbeat(now);
+  serviceSerialOutput();
 
   // Add other non-blocking application work here, such as motor control,
   // communications, or a display update. Avoid delay().
