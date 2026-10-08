@@ -1,2 +1,44 @@
+# Python bytecode, local environments, and test caches.
 __pycache__/
 *.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local build directories and Arduino-generated firmware exports.
+build/
+.build/
+*.ino.hex
+*.ino.with_bootloader.hex
+*.ino.elf
+*.ino.eep
+*.ino.bin
+
+# Compiled intermediates and linker output.
+*.o
+*.obj
+*.a
+*.d
+*.map
+
+# Executables produced by the documented Nano host checks.
+optic-coyote-*-test
+optic-coyote-*-test.exe
+
+# Operating-system folder metadata.
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Generated documentation caches; keep authored diagrams and exports trackable.
+/docs/_build/
+/docs/.cache/
+
+# Editor recovery files and temporary Markdown copies.
+*.swp
+*.swo
+*~
+*.md.bak
+*.md.tmp

@@ -1,5 +1,20 @@
 # Project Optic Coyote
 
+## Wiring and pinout documentation
+
+- [Project wiring scheme](docs/project-wiring.md): whole-project text diagram,
+  wire-by-wire sensor/OLED connections, power and ground, cameras, and the
+  optional GPIO draft.
+- [Component pinouts](docs/component-pinouts.md): Nano header diagram,
+  ATmega328P signal mapping, TCA9548A package diagram, sensor/OLED signal maps,
+  and the Raspberry Pi header pins used by the draft.
+- [Sensor interface reference](docs/nano-ultrasonic-pinout.md) and
+  [OLED installation guide](docs/oled-display.md): firmware-specific setup and
+  operating details.
+
+These references distinguish firmware-defined signals from board-dependent
+connector layouts and supply requirements. Physical wiring remains unverified.
+
 ## Base ultrasonic connectivity architecture
 
 ```text

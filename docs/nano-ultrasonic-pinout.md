@@ -1,5 +1,9 @@
 # Nano four-sensor pinout and interface reference
 
+For the complete assembly, see the [project wiring scheme](project-wiring.md)
+and [controller/module pinouts](component-pinouts.md). This reference
+covers the sensor Nano, mux, and sensor interface in detail.
+
 Project Optic Coyote — wiring and firmware reference, 2026-10-02.
 
 Applies to the **ATmega328P Nano with a CH340 USB serial bridge**, four

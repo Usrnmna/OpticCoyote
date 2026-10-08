@@ -1,5 +1,9 @@
 # Rear-bumper OLED display through Raspberry Pi USB
 
+For the complete assembly, use the [project wiring scheme](project-wiring.md)
+and [controller/module pinouts](component-pinouts.md). This guide covers the
+display path's installation and operation.
+
 The four rear-bumper sensors appear as **1, 2, 3, 4 from left to right** on a
 0.91-inch SSD1306 **128x32 I2C** OLED. Each distance is rounded to one decimal
 place in feet. For example, 305, 610, 914, and 1219 mm display as:
