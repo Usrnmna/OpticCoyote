@@ -61,6 +61,9 @@ constexpr uint8_t kSensorCount = 4;
 // Channels must be distinct, in 0..7. Labels must be nonempty and contain no
 // commas/newlines and at most 23 characters to fit the serial packet buffer.
 // Renaming a label changes its CSV header and nearest_zone.
+// The Pi OLED bridge maps these four column positions to rear-bumper sensors
+// 1..4 left to right. The legacy labels below do not set their physical location;
+// see docs/oled-display.md for the bridge's adjustable cable mapping.
 constexpr uint8_t kMuxChannels[] = {0, 1, 2, 3};
 const char *const kZoneLabels[] = {
     "front_left", "front_right", "rear_left", "rear_right"};

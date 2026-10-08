@@ -20,6 +20,15 @@ RCWL-1655 pin aliases and R7 settings below are specific to that module; do not
 assume they describe every AJ-SR04M revision. AJ-SR04M compatibility has not
 been bench-tested in this project.
 
+## Rear-bumper OLED installation
+
+The Pi can forward this sensor Nano's CSV to a second ELEGOO Nano driving
+the SSD1306 display; see the [OLED setup guide](oled-display.md). The
+sensor wiring below is unchanged. In the rear-bumper installation, sensors
+1-4 are all on the rear bumper, ordered left to right on the OLED. The
+front/rear names below are legacy firmware labels, not physical placement
+requirements. The Pi bridge can remap the four column positions.
+
 ## Signal wiring graph
 
 ```text
