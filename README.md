@@ -23,18 +23,39 @@ The Raspberry Pi communicates with the Nano through USB serial. The Nano owns th
 ### Existing implementation and details still to resolve
 
 - **I2C fan-out:** the user confirmed retaining the existing TCA9548A wiring for the Nano firmware: mux address `0x70`, with one RCWL-1655 at `0x57` on each of channels 0-3. Devices with the same fixed address remain isolated on separate channels.
-- **Pi software integration:** the sensor sketch emits distance CSV at 115200 baud only after receiving `START` followed by a line ending. `STOP` stops transmission. The camera selector's USB serial input expects JSON camera commands. The physical USB link alone does not connect those application protocols; a distance receiver or translation step is still needed.
+- **Pi OLED integration:** the [USB OLED bridge](rpi-oled-bridge/bridge.py) starts the sensor stream, receives its CSV at 115200 baud, and forwards the four distances to a second ELEGOO Nano running the [SSD1306 display sketch](optic_coyote_display/optic_coyote_display.ino). The camera selector's USB input still expects JSON camera commands; this display bridge does not select cameras.
 - **Earlier GPIO draft:** `draft-gpio-link/` documents a separate Arduino-to-Pi GPIO prototype. It is retained for reference and is outside this base USB connectivity path.
 
-The Nano firmware sends a cached four-zone USB packet after every successful sensor reading while streaming. It retains the I2C conversion wait and enforces at least 10 ms after each read before retriggering that same sensor. Pi integration and physical hardware validation remain separate work.
+The Nano firmware sends a cached four-zone USB packet after every successful sensor reading while streaming. It retains the I2C conversion wait and enforces at least 10 ms after each read before retriggering that same sensor. The OLED USB path is implemented; physical hardware validation remains required.
+
+## Rear-bumper OLED display
+
+The [OLED setup guide](docs/oled-display.md) covers the second Nano's wiring,
+firmware upload, Pi dependencies, USB port selection, and verification commands.
+Both Nanos connect to separate Pi USB-A ports using USB-A-to-USB-C data cables.
+The new display Nano drives a 0.91-inch **SSD1306 128x32 I2C OLED** on A4/SDA and
+A5/SCL. Its four fixed columns show sensors **1, 2, 3, 4 from left to right**, in
+feet with one decimal place, for example `1.0 2.0 3.0 4.0`.
+
+The default order follows sensor CSV positions 1-4 (mux channels 0-3). The existing
+front/rear CSV labels are retained for compatibility; this installation places
+all four sensors on the rear bumper. `--sensor-order` adjusts the physical cable
+mapping. Missing values or a stopped stream show `--.-`. The original CSV has no
+per-sensor ages, so a failed individual sensor can retain its cached value while
+other sensors continue reporting. See the guide's failure behavior before use.
 
 ## Existing components
 
-This repository contains two four-input components and a separate draft GPIO connection between them. The sensor and camera programs run independently; the draft provides an alternative Arduino sketch and a Pi warning listener that can feed camera-selection commands to the selector.
+This repository contains ultrasonic sensing, a Pi-to-Nano OLED display path,
+camera selection, and a separate draft GPIO camera connection. The display bridge
+consumes the sensor program's CSV. The camera program remains independent; the
+draft provides an alternative Arduino sketch and Pi camera-warning listener.
 
 | Component | Purpose | Files |
 | --- | --- | --- |
 | Ultrasonic sensing | Poll four RCWL-1655 or compatible AJ-SR04M I2C sensors through an I2C multiplexer and report distances over serial. | [`optic_coyote_ultrasonic/`](optic_coyote_ultrasonic/) |
+| OLED display | Receive four distances on a second Nano and display decimal feet in sensor order. | [`optic_coyote_display/`](optic_coyote_display/) |
+| Pi USB distance bridge | Read sensor CSV and forward the latest ordered snapshot to the display Nano. | [`rpi-oled-bridge/`](rpi-oled-bridge/) |
 | AHD camera selection | Show one of four AHD cameras on a Raspberry Pi HDMI display, selected through GPIO, USB serial, or standard input. | [`rpi-ahd-selector/`](rpi-ahd-selector/) |
 | Draft GPIO connection | Send the nearest warning's camera number from Arduino; receive it in a separate Pi listener. | [`draft-gpio-link/`](draft-gpio-link/) |
 
@@ -564,6 +585,7 @@ The Python checks use the standard library and do not require attached devices o
 ```sh
 python3 -m unittest discover -s rpi-ahd-selector -p "test_*.py" -v
 python3 -m unittest discover -s draft-gpio-link -p "test_*.py" -v
+python3 -m unittest discover -s rpi-oled-bridge -p "test_*.py" -v
 python3 rpi-ahd-selector/selector.py --check-config
 python3 rpi-ahd-selector/selector.py --demo --headless --check-config
 python3 rpi-ahd-selector/control.py --camera 2
@@ -571,16 +593,17 @@ python3 draft-gpio-link/warning_receiver.py --simulate 0 1 2 3 4 0 -1
 python3 draft-gpio-link/warning_receiver.py --selector-json --simulate 0 1 2 3 4 0
 ```
 
-Run both explicit discovery commands: the tests live in separate component directories. The selector and sender suite covers command validation/framing, configuration defaults and limits, pipeline construction, switching/retry cleanup, GPIO arbitration, serial reconnects, and sender acknowledgements. The receiver suite covers the draft link separately. Python tests do not compile either Arduino sketch.
+Run all three explicit discovery commands: the tests live in separate component directories. The selector and sender suite covers command validation/framing, configuration defaults and limits, pipeline construction, switching/retry cleanup, GPIO arbitration, serial reconnects, and sender acknowledgements. The receiver suite covers the draft link separately. The OLED bridge suite covers distance parsing/order, stale input, framing, and USB cleanup. Python tests do not compile the Arduino sketches.
 
 Build each sketch separately in Arduino IDE with the target board selected. With Arduino CLI and the matching board core already installed, a classic Nano build from the project root is:
 
 ```sh
 arduino-cli compile --fqbn arduino:avr:nano:cpu=atmega328 optic_coyote_ultrasonic
+arduino-cli compile --fqbn arduino:avr:nano:cpu=atmega328 optic_coyote_display
 arduino-cli compile --fqbn arduino:avr:nano:cpu=atmega328 draft-gpio-link/arduino_camera_warning
 ```
 
-Use your board's FQBN when it differs. These commands compile without uploading. Firmware compilation and software tests do not establish physical sensor accuracy, electrical compatibility, GPIO/serial operation, camera capture, HDMI output, or end-to-end response time. Those require the hardware checks above.
+Install the OLED libraries listed in the [display guide](docs/oled-display.md) before compiling its sketch. Use your board's FQBN when it differs. These commands compile without uploading. Firmware compilation and software tests do not establish physical sensor accuracy, electrical compatibility, GPIO/serial operation, camera capture, HDMI/OLED output, or end-to-end response time. Those require the hardware checks above. The display guide also includes the C++ host check for its actual sketch.
 
 The Nano stream contract also has a host simulation that includes the actual sketch and substitutes the clock, serial port, and I2C devices. With a C++ compiler installed, run from the project root (Windows MinGW example):
 
