@@ -210,7 +210,7 @@ class TriggerWorkerTests(unittest.TestCase):
         state.trigger("LEFT")
         first, second = FakeProcess(), FakeProcess()
         launches = []
-        def start(*args):
+        def start(*args, **_options):
             launches.append(stop.ticks)
             if len(launches) == 1:
                 state.trigger("BOTH")
@@ -231,7 +231,7 @@ class TriggerWorkerTests(unittest.TestCase):
         state.trigger("RIGHT")
         process = FakeProcess()
         stop = threading.Event()
-        def start(*args):
+        def start(*args, **_options):
             stop.set()
             return process
         with patch.object(selector.subprocess, "Popen", side_effect=start) as popen:
@@ -268,7 +268,7 @@ class TriggerWorkerTests(unittest.TestCase):
                 observed.append(selector.apply_message(state, '{"status":true}'))
                 published.set()
         producer = threading.Thread(target=publish_both)
-        def start(*args):
+        def start(*args, **_options):
             if not launch_entered.is_set():
                 launch_entered.set()
                 accepted_during_launch.append(published.wait(1))
@@ -315,7 +315,7 @@ class TriggerWorkerTests(unittest.TestCase):
             active = count < 8 or 16 <= count < 24 or 32 <= count < 40
             state.trigger(trigger.update(active, False, count * 0.05))
         stop = FakeStop(tick, limit=65)
-        def start(*args):
+        def start(*args, **_options):
             start_times.append(stop.ticks)
             return processes[len(start_times) - 1]
         with patch.object(selector.subprocess, "Popen", side_effect=start) as popen:

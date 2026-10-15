@@ -20,6 +20,14 @@ CLI cannot stop camera or reverse processes; future in-process integrations
 must catch buzzer playback and cleanup failures at the optional call boundary
 and report the fault without setting another feature's shutdown event.
 
+The selector's stdin/stdout command connection is optional. Input/readiness
+errors, incomplete reply writes, or flush failures disable only that connection; GPIO monitoring,
+serial control, and video playback continue. Capture subprocesses receive null
+stdin/stdout so they do not inherit that connection; GStreamer diagnostics use
+standard error. A missing `python3-serial` package disables only the optional
+serial worker and logs an error. Install the package and restart the selector
+to restore that worker. An unplugged serial endpoint instead retries normally.
+
 | Reverse input/state | Blinker state | Sensor/OLED behavior | Camera/HDMI behavior |
 | --- | --- | --- | --- |
 | LOW or unqualified HIGH | LEFT or RIGHT | Idle; no distance ownership | Selected side camera |
@@ -122,6 +130,22 @@ and physical USB topology are not checked. Device identities can change after
 inspection. This checker does not reserve resources and is not a substitute
 for runtime ownership.
 
+The reverse bridge records the opened sensor descriptor's Linux character-device
+identity (`fstat().st_rdev`). Before each OLED open, the target path must identify
+a different character device, even if the original sensor path has disappeared
+or changed. After opening, the OLED descriptor must match the inspected target
+and differ from the owned sensor. Missing paths, unavailable identity metadata,
+and identity changes defer only the OLED retry. Rejected candidates are closed
+without acquisition, release, or display-value commands.
+Shutdown observed after GPIO/sensor reads prevents a new OLED reconnect.
+Lookup and descriptor checks also observe shutdown; a candidate opened during
+cancellation is closed before it becomes an owned display link or receives
+protocol commands. Cleanup of established links still attempts release.
+Stable `/dev/serial/by-id` or `/dev/serial/by-path` assignments remain necessary.
+These checks prevent protocol writes to detected aliases; they do not make
+lookup/open atomic or prevent control-line/reset side effects during serial
+opening. Device numbers can be reused and do not prove physical USB roles.
+
 The aggregate checker is an audit, not a shared startup gate. A missing camera
 or OLED must remain `INCOMPLETE` because its identity cannot be verified, while
 unrelated configured services can still run. Launch services independently;
@@ -181,6 +205,7 @@ test is required before choosing final timing, power, hub, and camera settings.
 python3 -m unittest discover -s tests/integration -p 'test_*.py' -v
 python3 -m unittest discover -s rpi-ahd-selector -p 'test_*.py' -v
 python3 -m unittest discover -s rpi-oled-bridge -p 'test_*.py' -v
+python3 -m unittest discover -s rpi-buzzer -p 'test_*.py' -v
 ```
 
 The integration suite exercises interleaved BOTH/reverse transitions, reverse
@@ -195,6 +220,19 @@ Failure-isolation cases exercise camera launch/capture failure alongside
 reverse ranging and LOW release, missing reverse USB endpoints alongside
 camera switching, an absent optional selector controller while its playback
 worker runs, and locally handled buzzer backend failures alongside both modes.
+Additional cases detach the stdin/stdout control transport and retarget an OLED
+path during an active sensor session. The alias case verifies continued sensor
+renewals, reverse LOW release, camera switching, and healthy buzzer playback.
+Missing optional serial dependencies and capture child-process stream isolation
+are covered by selector tests. Further cases reject OLED descriptor changes
+during opening and missing identity metadata, with sensor renewals and LOW
+release preserved. Command tests discard partial input across serial reconnects,
+stop the current batch after incomplete replies or flush failures, and suppress
+unprocessed commands when shutdown is observed after a read or between replies.
+Cancellation during reply preparation suppresses that unsent reply as well.
+Further software tests cancel OLED reconnects during pathname lookup, opening,
+and descriptor inspection, and retain direct candidate-close failures in the
+diagnostic error report.
 These tests establish software boundaries, not physical immunity to shared
 power, USB, or GPIO hardware failures.
 
@@ -205,3 +243,8 @@ contention, and response timing remain untested. The
 [adapter diagnostic](../README.md#pi-side-adapter-diagnostic) provide separate
 procedures for later hardware validation; they must not compete with running
 owners of the same ports or capture devices.
+
+Generated reports under root `reports/`, test output under root `test-results/`,
+and root `coverage.xml` are ignored by Git, along with component diagnostic
+report directories and local tuning files. Default JSON configurations, source,
+tests, and authored documentation remain version-controlled.

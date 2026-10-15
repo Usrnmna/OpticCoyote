@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import types
 import unittest
 from unittest.mock import patch
@@ -231,6 +232,10 @@ class PlaybackTests(unittest.TestCase):
             selector.player(state, CONFIG, stop)
         self.assertEqual(start.call_count, 2)
         self.assertIn("device=/dev/video6", start.call_args_list[1].args[0])
+        for call in start.call_args_list:
+            self.assertEqual(call.kwargs["stdin"], subprocess.DEVNULL)
+            self.assertEqual(call.kwargs["stdout"], subprocess.DEVNULL)
+            self.assertNotIn("stderr", call.kwargs)
         self.assertTrue(first.terminated)
         self.assertTrue(second.terminated)
         self.assertIsNone(state.snapshot()["pipeline_camera"])
@@ -267,7 +272,7 @@ class PlaybackTests(unittest.TestCase):
                         limit=7)
         started_at = []
         processes = iter([first, second])
-        def start(*args):
+        def start(*args, **_options):
             started_at.append(stop.ticks)
             return next(processes)
         with patch.object(selector.time, "monotonic", side_effect=lambda: stop.ticks), \
@@ -314,6 +319,80 @@ class PlaybackTests(unittest.TestCase):
 
 
 class SerialTests(unittest.TestCase):
+    def test_shutdown_during_read_or_reply_drops_remaining_commands(self):
+        for cancel_at in ("read", "format", "write"):
+            with self.subTest(cancel_at=cancel_at):
+                state = selector.State(1)
+                stop = threading.Event()
+                writes = []
+                class Port:
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *_args):
+                        pass
+
+                    def read(self, _size):
+                        if cancel_at == "read":
+                            stop.set()
+                        return b'{"camera":2}\n{"camera":3}\n'
+
+                    def write(self, reply):
+                        writes.append(reply)
+                        stop.set()
+                        return len(reply)
+
+                module = types.SimpleNamespace(Serial=lambda *a, **k: Port(), SerialException=OSError)
+                original_dumps = json.dumps
+                def dumps(value):
+                    result = original_dumps(value)
+                    if cancel_at == "format":
+                        stop.set()
+                    return result
+                with patch.dict(sys.modules, {"serial": module}), patch.object(selector.json, "dumps", side_effect=dumps):
+                    selector.serial_control(state, {**CONFIG, "serial_port": "control"}, stop)
+                self.assertEqual(state.selected, 1 if cancel_at == "read" else 2)
+                self.assertEqual(len(writes), 1 if cancel_at == "write" else 0)
+
+    def test_reconnect_discards_partial_command_and_failed_reply_batch(self):
+        state = selector.State(1)
+        stop = threading.Event()
+        from unittest.mock import Mock
+        first, second = Mock(), Mock()
+        first.__enter__ = Mock(return_value=first)
+        first.__exit__ = Mock(return_value=False)
+        second.__enter__ = Mock(return_value=second)
+        second.__exit__ = Mock(return_value=False)
+        first.read.side_effect = [b'{"camera":', OSError("unplugged")]
+        # A suffix from the previous connection cannot complete its old command.
+        second.read.return_value = b'2}\n{"camera":3}\n'
+        second.write.return_value = 0
+        module = types.SimpleNamespace(Serial=Mock(side_effect=[first, second]), SerialException=OSError)
+        waits = []
+        def retry(_delay):
+            waits.append(state.selected)
+            if len(waits) == 2:
+                stop.set()
+        with patch.dict(sys.modules, {"serial": module}), patch.object(stop, "wait", side_effect=retry):
+            selector.serial_control(state, {**CONFIG, "serial_port": "control"}, stop)
+        self.assertEqual(waits, [1, 1])
+        self.assertEqual(state.selected, 1)
+        first.write.assert_not_called()
+        second.write.assert_called_once()
+        self.assertFalse(json.loads(second.write.call_args.args[0])["ok"])
+
+    def test_missing_optional_serial_package_does_not_stop_playback(self):
+        state = selector.State(1)
+        stop = FakeStop(lambda tick: state.select(2) if tick == 1 else None, limit=3)
+        with patch.dict(sys.modules, {"serial": None}), self.assertLogs(selector.LOG, level="ERROR"):
+            selector.serial_control(state, {**CONFIG, "serial_port": "control"}, stop)
+        self.assertFalse(stop.is_set())
+        first, second = FakeProcess(), FakeProcess()
+        with patch.object(selector.subprocess, "Popen", side_effect=[first, second]) as start:
+            selector.player(state, CONFIG, stop)
+        self.assertEqual(start.call_count, 2)
+        self.assertTrue(first.terminated and second.terminated)
+
     def test_serial_disconnect_reconnect_and_command_acknowledgement(self):
         state = selector.State(1)
         stop = FakeStop(lambda _: None, limit=2)

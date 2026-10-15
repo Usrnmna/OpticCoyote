@@ -90,7 +90,7 @@ def load_config(path=DEFAULT_CONFIG):
 
 
 class GPIOOutput:
-    """Own a gpiozero output and lgpio factory; logical zero always means silent."""
+    """Own a gpiozero output and lgpio factory; logical zero requests inactive."""
     def __init__(self, config):
         from gpiozero import DigitalOutputDevice, PWMOutputDevice
         from gpiozero.pins.lgpio import LGPIOFactory
@@ -118,23 +118,41 @@ class GPIOOutput:
                 self.device.on()
 
     def off(self):
-        """Stop PWM before driving inactive; still attempt OFF if stopping fails."""
+        """Stop PWM before driving inactive; retain both errors if either fails."""
         if self.passive:
+            stop_error = None
             try:
-                self.device.frequency = None
+                try:
+                    self.device.frequency = None
+                except Exception as error:
+                    stop_error = error
+                    raise
             finally:
-                self.device.off()
+                try:
+                    self.device.off()
+                except Exception as error:
+                    if stop_error is not None:
+                        raise RuntimeError(f"PWM stop failed: {stop_error}; inactive-level write failed: {error}") from stop_error
+                    raise
         else:
             self.device.off()
 
     def close(self):
-        try:
+        """Attempt every release operation without masking an earlier OFF failure."""
+        failures = []
+        for label, operation in (("silence", self.off), ("device close", self.device.close),
+                                 ("factory close", self.factory.close)):
             try:
-                self.off()
-            finally:
-                self.device.close()
-        finally:
-            self.factory.close()
+                operation()
+            except BaseException as error:
+                # Complete the other release attempts before propagating an interrupt.
+                failures.append((label, error))
+        if failures:
+            for _, error in failures:
+                if not isinstance(error, Exception):
+                    raise error
+            detail = "; ".join(f"{label}: {error}" for label, error in failures)
+            raise RuntimeError(f"Buzzer GPIO cleanup failed: {detail}") from failures[0][1]
 
 
 class Buzzer:
