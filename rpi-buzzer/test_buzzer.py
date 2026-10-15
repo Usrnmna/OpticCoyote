@@ -479,7 +479,7 @@ class GPIOTests(unittest.TestCase):
         device, factory = StopFailure(), Mock()
         with patch.dict("sys.modules", self.modules(device, factory)):
             output = buzzer.GPIOOutput(enabled())
-            with self.assertRaisesRegex(OSError, "PWM stop failed"):
+            with self.assertRaisesRegex(RuntimeError, "PWM stop failed"):
                 output.close()
         device.off.assert_called_once()
         device.close.assert_called_once()
@@ -490,7 +490,47 @@ class GPIOTests(unittest.TestCase):
         device.off.side_effect = OSError("output failed")
         with patch.dict("sys.modules", self.modules(device, factory)):
             output = buzzer.GPIOOutput(enabled())
-            with self.assertRaises(OSError):
+            with self.assertRaisesRegex(RuntimeError, "output failed"):
+                output.close()
+        device.close.assert_called_once()
+        factory.close.assert_called_once()
+
+    def test_pwm_stop_and_inactive_write_failures_are_both_reported(self):
+        class BrokenPWM:
+            @property
+            def frequency(self):
+                return 2000
+
+            @frequency.setter
+            def frequency(self, _value):
+                raise OSError("waveform stop rejected")
+
+            def off(self):
+                raise OSError("HIGH write rejected")
+
+        with patch.dict("sys.modules", self.modules(BrokenPWM(), Mock())):
+            output = buzzer.GPIOOutput(enabled())
+            with self.assertRaisesRegex(RuntimeError, "waveform stop rejected.*HIGH write rejected"):
+                output.off()
+
+    def test_cleanup_reports_first_fault_and_attempts_every_release(self):
+        device, factory = Mock(), Mock()
+        device.off.side_effect = OSError("inactive write failed")
+        device.close.side_effect = OSError("device release failed")
+        factory.close.side_effect = OSError("factory release failed")
+        with patch.dict("sys.modules", self.modules(device, factory)):
+            output = buzzer.GPIOOutput(enabled())
+            with self.assertRaisesRegex(RuntimeError, "inactive write failed.*device release failed.*factory release failed"):
+                output.close()
+        device.close.assert_called_once()
+        factory.close.assert_called_once()
+
+    def test_interrupted_silence_still_releases_device_and_factory(self):
+        device, factory = Mock(), Mock()
+        device.off.side_effect = KeyboardInterrupt()
+        with patch.dict("sys.modules", self.modules(device, factory)):
+            output = buzzer.GPIOOutput(enabled())
+            with self.assertRaises(KeyboardInterrupt):
                 output.close()
         device.close.assert_called_once()
         factory.close.assert_called_once()

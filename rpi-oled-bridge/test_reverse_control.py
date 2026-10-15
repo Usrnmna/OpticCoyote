@@ -1,6 +1,7 @@
 """Reverse GPIO/USB lifecycle tests with synthetic clocks and ports; no hardware."""
 import io
 import json
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -46,7 +47,13 @@ class Port:
         return self
 
     def __exit__(self, *_args):
+        self.close()
+
+    def close(self):
         self.closed = True
+
+    def fileno(self):
+        return 101 if self.sensor else 102
 
     def reset_input_buffer(self):
         self.incoming.clear()
@@ -80,6 +87,48 @@ class Port:
         chunk = bytes(self.incoming[:count])
         del self.incoming[:count]
         return chunk
+
+
+class SimulatedDeviceIdentities:
+    """Supply explicit fake Linux serial metadata for device-free session tests."""
+    def setUp(self):
+        super().setUp()
+        original_fstat = reverse.os.fstat
+        def fake_fstat(fd):
+            if fd in (101, 102):
+                return SimpleNamespace(st_mode=stat.S_IFCHR, st_rdev=fd)
+            return original_fstat(fd)
+        self.enterContext(patch.object(reverse.os, "fstat", side_effect=fake_fstat))
+        self.path_identity = self.enterContext(patch.object(reverse, "path_device_identity",
+            side_effect=lambda path: {"sensor": 101, "display": 102}[path]))
+
+
+class DeviceIdentityTests(unittest.TestCase):
+    def test_character_device_identity_ignores_alias_inode(self):
+        for inode in (1, 999):
+            info = SimpleNamespace(st_mode=stat.S_IFCHR, st_rdev=101, st_ino=inode)
+            self.assertEqual(reverse.character_device_identity(info), 101)
+
+    def test_regular_file_and_directory_are_not_serial_endpoints(self):
+        for mode in (stat.S_IFREG, stat.S_IFDIR):
+            with self.subTest(mode=mode), self.assertRaises(OSError):
+                reverse.character_device_identity(SimpleNamespace(st_mode=mode, st_rdev=0))
+
+    def test_open_identity_uses_descriptor_and_fails_closed(self):
+        port = Port(Clock(), True)
+        with patch.object(reverse.os, "fstat", return_value=SimpleNamespace(st_mode=stat.S_IFCHR, st_rdev=777)) as inspect:
+            self.assertEqual(reverse.opened_device_identity(port), 777)
+        inspect.assert_called_once_with(101)
+        with patch.object(reverse.os, "fstat", side_effect=OSError("descriptor closed")), self.assertRaises(OSError):
+            reverse.opened_device_identity(port)
+        with self.assertRaises(OSError):
+            reverse.opened_device_identity(object())
+        with patch.object(port, "fileno", side_effect=NotImplementedError), self.assertRaises(OSError):
+            reverse.opened_device_identity(port)
+
+    def test_path_identity_rejects_missing_path(self):
+        with patch.object(reverse.os, "stat", side_effect=FileNotFoundError("missing")), self.assertRaises(OSError):
+            reverse.path_device_identity("missing")
 
 
 class GateTests(unittest.TestCase):
@@ -201,7 +250,7 @@ class FreshnessTests(unittest.TestCase):
             session.renewal(1.5, 1)
 
 
-class LifecycleTests(unittest.TestCase):
+class LifecycleTests(SimulatedDeviceIdentities, unittest.TestCase):
     def test_usb_fault_reopens_both_ports_and_requalifies_current_input(self):
         for stay_high in (True, False):
             with self.subTest(stay_high=stay_high):
@@ -473,7 +522,178 @@ class LifecycleTests(unittest.TestCase):
         self.assertTrue(any(packet.startswith(b"K,") for _, packet in sensor.writes))
 
 
-class DisplayIsolationTests(unittest.TestCase):
+class DisplayIsolationTests(SimulatedDeviceIdentities, unittest.TestCase):
+    def test_shutdown_during_gpio_or_sensor_read_does_not_open_oled(self):
+        for stage in ("gpio", "sensor_read"):
+            with self.subTest(stage=stage):
+                clock = Clock(300)
+                sensor, oled = Port(clock, True), Port(clock)
+                sensor.incoming.extend(b"idle data\n")
+                opens = []
+                def read_gpio():
+                    if stage == "gpio":
+                        clock.ms = 300
+                    return False
+                original_read = sensor.read
+                def read(count):
+                    clock.ms = 300
+                    return original_read(count)
+                sensor.read = read
+                def open_display():
+                    opens.append(clock.ms)
+                    return oled
+                link = reverse.DisplayLink(CONFIG, open_port=open_display)
+                try:
+                    reverse.pump(sensor, link, ARGS, CONFIG, clock, reverse.ReverseGate(0.1),
+                                 read_gpio, clock.now)
+                    self.assertEqual(opens, [])
+                    self.assertEqual(oled.writes, [])
+                finally:
+                    link.close()
+
+    def test_shutdown_during_oled_lookup_open_or_identity_closes_unpublished_candidate(self):
+        for stage in ("lookup", "open", "identity"):
+            with self.subTest(stage=stage):
+                clock = Clock(300)
+                sensor, candidate = Port(clock, True), Port(clock)
+                opens = []
+                def open_port(path, **_options):
+                    opens.append(path)
+                    if path == "display":
+                        if stage == "open":
+                            clock.ms = 300
+                        return candidate
+                    return sensor
+                def path_identity(_path):
+                    if stage == "lookup":
+                        clock.ms = 300
+                    return 102
+                def opened_identity(port):
+                    if port is candidate and stage == "identity":
+                        clock.ms = 300
+                    return 101 if port is sensor else 102
+                original_pump = reverse.pump
+                def pump(*args):
+                    return original_pump(*args, clock=clock.now)
+                with patch.object(reverse, "path_device_identity", side_effect=path_identity), \
+                        patch.object(reverse, "opened_device_identity", side_effect=opened_identity), \
+                        patch.object(reverse, "pump", side_effect=pump):
+                    reverse.run_session(SimpleNamespace(Serial=open_port), ARGS,
+                                        {**CONFIG, "boot_ms": 0}, clock,
+                                        reverse.ReverseGate(0.1), lambda: False)
+                self.assertEqual("display" in opens, stage != "lookup")
+                self.assertEqual(candidate.closed, stage != "lookup")
+                self.assertEqual(candidate.writes, [])
+                self.assertTrue(sensor.closed)
+                self.assertIn((300, b"\nX\n"), sensor.writes)
+
+    def test_unverified_sensor_is_closed_without_protocol_writes(self):
+        sensor = Port(Clock(), True)
+        with patch.object(reverse, "opened_device_identity", side_effect=OSError("unverified")), \
+                self.assertRaisesRegex(OSError, "unverified"):
+            reverse.run_session(SimpleNamespace(Serial=lambda *a, **k: sensor), ARGS, CONFIG,
+                                sensor.clock, reverse.ReverseGate(0.1), lambda: True)
+        self.assertTrue(sensor.closed)
+        self.assertEqual(sensor.writes, [])
+
+    def test_display_identity_failures_preserve_sensor_until_low(self):
+        for failure in ("alias", "missing", "changed_during_open", "sensor_during_open", "fstat", "close"):
+            with self.subTest(failure=failure):
+                clock = Clock(800)
+                sensor, candidate = Port(clock, True), Port(clock)
+                if failure == "close":
+                    def close():
+                        raise OSError("Rejected candidate close failed")
+                    candidate.close = close
+                opened = []
+
+                def open_port(path, **_options):
+                    opened.append(path)
+                    return sensor if path == "sensor" else candidate
+
+                def path_identity(path):
+                    if failure == "missing":
+                        raise FileNotFoundError("OLED path missing")
+                    return 101 if failure == "alias" else 102
+
+                def opened_identity(port):
+                    if port is sensor:
+                        return 101
+                    if failure == "fstat":
+                        raise OSError("OLED identity unavailable")
+                    return 101 if failure == "sensor_during_open" else 103
+
+                original_pump = reverse.pump
+                def pump(*args):
+                    return original_pump(*args, clock=clock.now, new_token=lambda: 42)
+
+                args = SimpleNamespace(**vars(ARGS))
+                if failure == "alias":
+                    # Runtime retargeting also permits equal names on a new sensor session.
+                    # Startup argument validation remains a separate configuration check.
+                    args.display_port = args.sensor_port
+                with patch.object(reverse, "path_device_identity", side_effect=path_identity), \
+                        patch.object(reverse, "opened_device_identity", side_effect=opened_identity), \
+                        patch.object(reverse, "pump", side_effect=pump), \
+                        self.assertLogs(reverse.LOGGER, level="WARNING") as logs:
+                    reverse.run_session(SimpleNamespace(Serial=open_port), args,
+                                        {**CONFIG, "boot_ms": 0, "reconnect_ms": 100}, clock,
+                                        reverse.ReverseGate(0.1), lambda: clock.ms < 700)
+                self.assertEqual(candidate.writes, [])
+                self.assertEqual(candidate.closed, failure not in ("alias", "missing", "close"))
+                self.assertEqual("display" in opened, failure not in ("alias", "missing"))
+                self.assertTrue(any(at >= 450 and data.startswith(b"K,") for at, data in sensor.writes))
+                self.assertIn((700, b"\nX\n"), sensor.writes)
+                self.assertFalse(any(100 < at < 700 and b"X" in data for at, data in sensor.writes))
+                if failure == "close":
+                    self.assertTrue(any("close unavailable" in line for line in logs.output))
+                    self.assertTrue(any("endpoint changed during open" in line for line in logs.output))
+
+    def test_slow_reopen_cannot_acquire_display_after_sensor_deadline(self):
+        clock = Clock(1800)
+        sensor, first, second = Port(clock, True), Port(clock), Port(clock)
+        config = {**CONFIG, "boot_ms": 0, "reconnect_ms": 100}
+        first.on_write = lambda packet: (_ for _ in ()).throw(OSError("unplugged")) if packet.startswith(b"K,") else None
+
+        def delayed_open():
+            # The last sensor poll was at 450 ms. Opening outlives its ACK
+            # deadline while cached sample ages remain below the stale limit.
+            clock.ms = 1500
+            return second
+
+        link = reverse.DisplayLink(config, port=first, open_port=delayed_open)
+        try:
+            with patch.object(reverse.secrets, "randbelow", return_value=42):
+                with self.assertRaisesRegex(reverse.SensorLinkFault, "Sensor telemetry"):
+                    reverse.pump(sensor, link, ARGS, config, clock, reverse.ReverseGate(0.1),
+                                 lambda: True, clock.now, new_token=lambda: 42)
+            self.assertTrue(second.closed)
+            self.assertFalse(any(packet.startswith((b"\nR,", b"K,", b"D,"))
+                                 for _, packet in second.writes))
+        finally:
+            link.close()
+
+    def test_low_during_packet_formatting_cancels_unsent_distance(self):
+        clock = Clock(300)
+        sensor, oled = Port(clock, True), Port(clock)
+        gate = reverse.ReverseGate(0.1)
+        high = True
+        original = reverse.SensorSession.packet
+
+        def cancelled_packet(session, *args, **kwargs):
+            nonlocal high
+            packet = original(session, *args, **kwargs)
+            high = False
+            gate.cancel()
+            return packet
+
+        with patch.object(reverse.SensorSession, "packet", cancelled_packet):
+            reverse.pump(sensor, oled, ARGS, CONFIG, clock, gate,
+                         lambda: high, clock.now, new_token=lambda: 42)
+        self.assertFalse(any(data.startswith(b"D,") for _, data in oled.writes))
+        self.assertEqual(sensor.writes[-1][1], b"\nX\n")
+        self.assertEqual(oled.writes[-1][1], b"\nX\n")
+
     def test_delayed_gpio_check_recomputes_distance_ages_before_write(self):
         clock = Clock(325)
         sensor, oled = Port(clock, True), Port(clock)

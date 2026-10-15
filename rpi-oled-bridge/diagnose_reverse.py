@@ -387,6 +387,10 @@ class ObservedPort:
         return self
 
     def __exit__(self, *_args):
+        self.close()
+
+    def close(self):
+        """Audit both normal cleanup and direct closure of rejected OLED candidates."""
         try:
             self.port.close()
         except Exception as error:

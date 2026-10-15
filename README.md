@@ -628,6 +628,19 @@ Serial/stdin commands are newline-terminated JSON objects containing exactly one
 {"status":true}
 ```
 
+The stdin/stdout command connection is optional. A failed read, readiness check,
+or reply write disables that connection without stopping camera playback or
+GPIO/serial monitoring. Capture subprocesses use null stdin/stdout and retain
+standard-error diagnostics. A missing `python3-serial` package disables only the
+optional serial worker; installing it requires a selector restart. Serial device
+disconnections retry automatically. Short or missing reply-write counts are
+treated as connection failures; later commands in that batch are discarded.
+Serial reconnects discard incomplete input from the previous connection.
+Shutdown is checked before each command, including after a blocking read, and
+after reply preparation before the reply is handed to the transport. Commands
+already applied and writes already started cannot be recalled. SIGINT/SIGTERM
+still stop the selector.
+
 In manual mode, the four inputs correspond to cameras 1–4. One active input selects that camera. All zero holds the previous selection. Multiple active inputs select the lowest numbered camera. Commands are complete snapshots, latch until changed and need no continuous retransmission. Rapid commands coalesce to the latest selection. Invalid commands leave selection unchanged and return an error. `inputs` accepts four JSON booleans or integer 0/1 values; `camera` requires an integer 1-4 and `status` requires `true`. Trigger mode rejects both selection commands in every state; status remains available over stdin and configured serial. Blank lines are ignored. Commands may contain at most 1024 bytes before the newline; an oversized line is discarded in full and receives an error when its newline arrives. An incomplete final line is not executed at input EOF.
 
 #### GPIO selection

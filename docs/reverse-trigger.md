@@ -140,6 +140,22 @@ display functions must use the same ownership path rather than competing serial
 writers. Commands use LF, with CRLF also accepted.
 Runtime path checks reject sensor/display aliases, including distinct character
 nodes with the same device ID; physical port roles still require verification.
+Startup argument validation rejects duplicate role paths. Once running, an
+OLED alias defers only the display, including after a sensor-session reconnect.
+The opened sensor descriptor's Linux character-device identity (`st_rdev`) is
+retained for the sensor session. Each OLED reopen compares its target path and
+opened descriptor against that retained identity. This remains effective if the
+sensor path disappears or is retargeted. A missing/non-character target,
+unavailable descriptor identity, or changed endpoint defers only the OLED retry;
+an opened but rejected candidate is closed without protocol writes. Sensor
+identity failure closes the sensor candidate without issuing commands and
+retries the sensor session. Stable device paths are still required: device
+numbers can be reused, and these checks cannot establish physical roles, make
+lookup/open atomic, or prevent reset/control-line effects from serial opening.
+Shutdown is checked after GPIO/sensor reads and around OLED lookup/open/identity
+inspection. A candidate returned after cancellation is closed without protocol
+writes; established sensor/display links retain their normal release cleanup.
+These cooperative checks cannot interrupt an OS operation already in progress.
 
 | Packet | Direction and meaning |
 | --- | --- |
@@ -168,6 +184,14 @@ reconnection during that acquisition receives a new display token and separate
 ACK/request history. The continuing sensor session and its sample ages are
 preserved. A new display ACK is required before any distance packet is sent;
 only current sensor values still within `distance_stale_ms` are eligible.
+Before each acquisition, renewal, or distance write, sensor telemetry health is
+rechecked after GPIO sampling. A slow OLED reopen cannot reacquire the display
+or forward cached values after `ack_timeout_ms` expires, even when those values
+remain within the longer per-sensor age limit. That timeout remains a sensor
+fault: release is attempted on both reverse links and sensor qualification restarts.
+Ordinary OLED faults continue to retry independently while healthy sensors range.
+The latched GPIO generation and shutdown flag are checked again after packet
+formatting, so cancellation during formatting discards the unsent packet.
 Old-token data is discarded. Sensor failures mark that sensor unavailable;
 unrelated working sensors cannot keep its old number fresh. Missing readings
 are represented as `-1`, displayed as `--.-`, never as a fabricated zero.

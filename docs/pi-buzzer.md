@@ -155,6 +155,15 @@ attempted if stopping PWM fails, and the failure is reported. Resource release
 returns the pin to input, so software OFF does not replace the external bias.
 Glitch-free transitions are not established by host tests.
 
+If both PWM cancellation and the inactive-level write fail, the error retains
+both causes. Cleanup attempts silence, device release, and factory release even
+when an earlier operation fails; normal cleanup failures are reported together.
+A reported failure does not establish a silent physical output. The lgpio
+[PWM implementation](https://github.com/joan2937/lg/blob/master/lgGpio.c) cancels
+the active PWM record under its transmit lock; the subsequent static write is
+therefore distinct from a queued duty update. This is source-derived behavior,
+not a measured electrical cancellation deadline.
+
 Faults latch until the owner is closed and recreated. Silence and cleanup are
 attempted after failures. `play`, `stop`, `wait`, and `close` report faults.
 Future optional-sound integrations must catch failures at that feature boundary
@@ -196,3 +205,6 @@ level, frequency accuracy, or buzzer operation has been tested. Tests also model
 deferred PWM duty updates and verify explicit PWM cancellation before static OFF
 for either polarity. The specified passive, active-low defaults are source-derived;
 the pin remains unassigned and playback disabled.
+Regression coverage includes simultaneous PWM-stop and inactive-level-write
+failures and failures at each cleanup stage, so the initiating error cannot be
+hidden by a later release error.

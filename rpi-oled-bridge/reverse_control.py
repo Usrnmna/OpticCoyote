@@ -7,13 +7,15 @@ already issued USB writes and physical sensor conversions cannot be recalled.
 from contextlib import ExitStack
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import threading
 import time
 
-from bridge import BAUD_RATE, LineFramer, same_device, write_packet
+from bridge import BAUD_RATE, LineFramer, write_packet
 
 
 LOGGER = logging.getLogger("reverse_bridge")
@@ -208,6 +210,10 @@ class ReverseCancelled(Exception):
     """A LOW edge or new qualification invalidated a pending serial operation."""
 
 
+class SensorLinkFault(OSError):
+    """Sensor health expired during optional display work; end the sensor session."""
+
+
 def release(sensor, display):
     """Attempt both independent releases even if the first USB port has failed."""
     first_error = None
@@ -286,7 +292,7 @@ class DisplayLink:
         self._close_port()
 
     def service(self, sensor_session, order, guarded_write):
-        """Advance the optional link once; only GPIO cancellation escapes to the sensor."""
+        """Retry OLED faults; propagate cancellation and expired sensor health."""
         try:
             if self.port is None:
                 if self.open_port is None or self.clock() < self.next_retry:
@@ -345,6 +351,11 @@ class DisplayLink:
                                                  order, token=self.session.token)
                 guarded_write(self.port, current_packet)
                 self.next_display = self.clock() + self.config["display_refresh_ms"] / 1000
+        except SensorLinkFault:
+            # A slow OLED operation can outlive the sensor deadline. Preserve
+            # the sensor fault rather than treating it as a display-only retry.
+            self.close()
+            raise
         except OSError as error:
             self.fault(error)
 
@@ -372,8 +383,13 @@ def pump(sensor, display, args, config, stop, gate, read_gpio, clock=time.monoto
         observed = gate.sample(read_gpio, clock)
         if stop.is_set() or observed != (True, generation):
             raise ReverseCancelled()
+        check_link_health()
         if callable(packet):
             packet = packet()
+        # Formatting can be overtaken by a LOW callback. Check the latched
+        # generation again without another potentially blocking GPIO read.
+        if stop.is_set() or gate.snapshot(clock()) != (True, generation):
+            raise ReverseCancelled()
         write_packet(port, packet)
         if stop.is_set() or gate.sample(read_gpio, clock) != (True, generation):
             raise ReverseCancelled()
@@ -383,7 +399,7 @@ def pump(sensor, display, args, config, stop, gate, read_gpio, clock=time.monoto
         now = clock()
         timeout = config["ack_timeout_ms"] / 1000
         if now - (session.received_at if session.received_at is not None else session.started) >= timeout:
-            raise OSError("Sensor telemetry acknowledgement expired")
+            raise SensorLinkFault("Sensor telemetry acknowledgement expired")
 
     def cancel_session():
         nonlocal session
@@ -395,6 +411,8 @@ def pump(sensor, display, args, config, stop, gate, read_gpio, clock=time.monoto
 
     while not stop.is_set():
         active, observed_generation = gate.sample(read_gpio, clock)
+        if stop.is_set():
+            break
         if session is not None and (not active or observed_generation != generation):
             cancel_session()
         if active and session is None:
@@ -436,6 +454,9 @@ def pump(sensor, display, args, config, stop, gate, read_gpio, clock=time.monoto
                     next_keepalive = clock() + config["sensor_keepalive_ms"] / 1000
             except ReverseCancelled:
                 cancel_session()
+        # Reads may complete after shutdown. Do not begin optional USB work.
+        if stop.is_set():
+            break
         try:
             display.service(session, args.sensor_order, guarded_write)
         except ReverseCancelled:
@@ -443,22 +464,67 @@ def pump(sensor, display, args, config, stop, gate, read_gpio, clock=time.monoto
         stop.wait(config["reverse_sample_ms"] / 1000)
 
 
+def character_device_identity(metadata):
+    """Identify a Linux character device independently of pathname and node inode."""
+    if not stat.S_ISCHR(metadata.st_mode):
+        raise OSError("Serial endpoint is not a character device")
+    return metadata.st_rdev
+
+
+def opened_device_identity(port):
+    """Use the owned descriptor; a USB alias may have changed since it was opened."""
+    try:
+        return character_device_identity(os.fstat(port.fileno()))
+    except (AttributeError, TypeError, ValueError, NotImplementedError) as error:
+        raise OSError("Cannot identify the opened serial endpoint") from error
+
+
+def path_device_identity(path):
+    """Resolve a candidate path before opening it; missing paths fail closed."""
+    return character_device_identity(os.stat(path))
+
+
 def run_session(serial_module, args, config, stop, gate, read_gpio, on_display_fault=None):
     """Own sensor acquisition and an independently reconnecting optional OLED link."""
-    if same_device(args.sensor_port, args.display_port):
-        raise ValueError("Sensor and display ports resolve to the same device")
     sensor = None
+    sensor_identity = None
 
     def open_display():
-        return serial_module.Serial(args.display_port, baudrate=BAUD_RATE, timeout=0,
-                                    write_timeout=config["usb_write_timeout_ms"] / 1000, exclusive=True)
+        # Compare against the owned sensor descriptor, not its mutable pathname.
+        if stop.is_set():
+            raise ReverseCancelled()
+        expected_identity = path_device_identity(args.display_port)
+        if stop.is_set():
+            raise ReverseCancelled()
+        if expected_identity == sensor_identity:
+            raise OSError("OLED path now aliases the sensor port; display retry deferred")
+        candidate = serial_module.Serial(args.display_port, baudrate=BAUD_RATE, timeout=0,
+                                        write_timeout=config["usb_write_timeout_ms"] / 1000, exclusive=True)
+        try:
+            if stop.is_set():
+                raise ReverseCancelled()
+            actual_identity = opened_device_identity(candidate)
+            if stop.is_set():
+                raise ReverseCancelled()
+            if actual_identity == sensor_identity or actual_identity != expected_identity:
+                raise OSError("OLED endpoint changed during open; display retry deferred")
+        except BaseException:
+            # Unverified or cancelled candidates must not receive protocol commands.
+            try:
+                candidate.close()
+            except OSError as error:
+                LOGGER.warning("Rejected OLED endpoint close unavailable: %s", error)
+            raise
+        return candidate
 
     display = DisplayLink(config, open_port=open_display, on_fault=on_display_fault)
     with ExitStack() as resources:
         try:
-            sensor = resources.enter_context(serial_module.Serial(
+            candidate_sensor = resources.enter_context(serial_module.Serial(
                 args.sensor_port, baudrate=BAUD_RATE, timeout=0,
                 write_timeout=config["usb_write_timeout_ms"] / 1000, exclusive=True))
+            sensor_identity = opened_device_identity(candidate_sensor)
+            sensor = candidate_sensor
             if stop.wait(config["boot_ms"] / 1000):
                 return
             release(sensor, None)

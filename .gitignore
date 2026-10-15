@@ -4,8 +4,14 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
 .coverage
+.coverage.*
 htmlcov/
+/coverage.xml
 
 # Optional installation-specific selector tuning; retain config.json as the audited default.
 /rpi-ahd-selector/config.local.json
@@ -15,6 +21,11 @@ htmlcov/
 /rpi-oled-bridge/reverse-diagnostic.local.json
 /rpi-oled-bridge/diagnostic-reports/
 /rpi-buzzer/buzzer.local.json
+
+# Generated review/diagnostic runs with a workspace-level report destination.
+# Synthetic fault-isolation logs belong here; authored docs and fixtures do not.
+/reports/
+/test-results/
 
 # Local build directories and Arduino-generated firmware exports.
 build/

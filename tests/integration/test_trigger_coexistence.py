@@ -17,7 +17,7 @@ import buzzer
 import control
 import selector
 import reverse_control as reverse
-from test_reverse_control import Clock, Port, CONFIG as REVERSE, ARGS
+from test_reverse_control import Clock, Port, CONFIG as REVERSE, ARGS, SimulatedDeviceIdentities
 from test_selector import FakeProcess, FakeStop
 
 
@@ -117,7 +117,7 @@ class CombinedStateTests(unittest.TestCase):
         processes = []
         errors = []
 
-        def launch(_args):
+        def launch(_args, **_options):
             process = FakeProcess()
             processes.append(process)
             if len(processes) == 1:
@@ -161,7 +161,141 @@ class CombinedStateTests(unittest.TestCase):
         self.assertIsNone(state.snapshot()["selected_camera"])
 
 
-class ResourceFailureTests(unittest.TestCase):
+class ResourceFailureTests(SimulatedDeviceIdentities, unittest.TestCase):
+    def test_retargeted_oled_path_is_rechecked_without_stopping_other_work(self):
+        clock = Clock(900)
+        sensor, display = Port(clock, True), Port(clock)
+        display.on_write = lambda packet: (_ for _ in ()).throw(OSError("OLED unplugged")) if packet.startswith(b"K,") else None
+        display_opens = []
+
+        def open_port(path, **_options):
+            if path == "sensor":
+                return sensor
+            display_opens.append(clock.ms)
+            return display if len(display_opens) == 1 else sensor
+
+        serial = SimpleNamespace(Serial=open_port)
+        original_pump = reverse.pump
+        config = {**REVERSE, "boot_ms": 0, "reconnect_ms": 100}
+
+        def simulated_pump(*args):
+            return original_pump(*args, clock=clock.now, new_token=lambda: 42)
+
+        state = selector.State(1, CAMERA)
+        state.trigger("LEFT")
+        processes = [FakeProcess(), FakeProcess()]
+        output = Mock()
+        buzzer_config = {**buzzer.load_config(), "enabled": True, "gpio_pin": 18}
+        with buzzer.Buzzer(buzzer_config, output_factory=lambda _: output) as speaker:
+            def video_tick(count):
+                if count == 1:
+                    with patch.object(reverse, "pump", side_effect=simulated_pump), \
+                            patch.object(reverse, "path_device_identity",
+                                         side_effect=lambda _: 101 if clock.ms >= 350 else 102):
+                        reverse.run_session(serial, ARGS, config, clock, reverse.ReverseGate(0.1),
+                                            lambda: clock.ms < 800)
+                    speaker.play("single_beep")
+                    self.assertTrue(speaker.wait(2))
+                    state.trigger("RIGHT")
+
+            with patch.object(selector.subprocess, "Popen", side_effect=processes) as launch:
+                selector.player(state, CAMERA, FakeStop(video_tick, limit=3))
+            self.assertEqual(launch.call_count, 2)
+            self.assertIsNone(speaker.status()["fault"])
+        self.assertEqual(display_opens, [0])
+        self.assertTrue(any(at >= 450 and packet.startswith(b"K,") for at, packet in sensor.writes))
+        self.assertFalse(any(100 < at < 800 and b"X" in packet for at, packet in sensor.writes))
+        self.assertIn((800, b"\nX\n"), sensor.writes)
+        self.assertTrue(output.apply.called)
+        self.assertTrue(all(process.terminated for process in processes))
+
+    def test_optional_stdin_transport_failure_does_not_request_video_shutdown(self):
+        for failure in ("write", "short_write", "none_write", "flush", "read", "select"):
+            with self.subTest(failure=failure):
+                config = {**CAMERA, "trigger_enabled": False, "gpio_pins": []}
+                stop = threading.Event()
+                output = SimpleNamespace(buffer=Mock())
+                if failure == "write":
+                    output.buffer.write.side_effect = BrokenPipeError("controller detached")
+                elif failure in ("short_write", "none_write"):
+                    output.buffer.write.return_value = 1 if failure == "short_write" else None
+                else:
+                    output.buffer.write.side_effect = len
+                if failure == "flush":
+                    output.buffer.flush.side_effect = BrokenPipeError("controller detached")
+                calls = []
+
+                def finish(*_args):
+                    self.assertFalse(stop.is_set(), "Optional command transport stopped video")
+                    calls.append("survived")
+                    stop.set()
+                    return True
+
+                def ready(*_args):
+                    if calls:
+                        finish()
+                        return ([], [], [])
+                    calls.append("attempt")
+                    if failure == "select":
+                        raise OSError("control input detached")
+                    return ([sys.stdin], [], [])
+
+                worker = Mock(ident=1)
+                read = OSError("control input detached") if failure == "read" else b'{"status":true}\n{"camera":2}\n'
+                with patch.object(Path, "read_text", return_value=json.dumps(config)), \
+                        patch.object(selector.shutil, "which", return_value="gst"), \
+                        patch.object(selector.threading, "Event", return_value=stop), \
+                        patch.object(selector.threading, "Thread", return_value=worker), \
+                        patch.object(selector.signal, "signal"), \
+                        patch.object(stop, "wait", side_effect=finish), \
+                        patch.object(selector.select, "select", side_effect=ready), \
+                        patch.object(selector.os, "read", side_effect=[read]), \
+                        patch.object(sys, "stdout", output), \
+                        patch.object(selector, "apply_message", wraps=selector.apply_message) as apply:
+                    selector.main([])
+                self.assertIn("survived", calls)
+                worker.start.assert_called_once()
+                self.assertEqual(apply.call_count, 0 if failure in ("select", "read") else 1)
+
+    def test_stdin_shutdown_during_read_or_reply_discards_remaining_batch(self):
+        for cancel_at in ("read", "format", "write"):
+            with self.subTest(cancel_at=cancel_at):
+                config = {**CAMERA, "trigger_enabled": False, "gpio_pins": []}
+                stop = threading.Event()
+                output = SimpleNamespace(buffer=Mock())
+                state = selector.State(1, config)
+
+                def read(*_args):
+                    if cancel_at == "read":
+                        stop.set()
+                    return b'{"camera":2}\n{"camera":3}\n'
+
+                def write(reply):
+                    stop.set()
+                    return len(reply)
+
+                original_dumps = json.dumps
+                def dumps(value):
+                    result = original_dumps(value)
+                    if cancel_at == "format":
+                        stop.set()
+                    return result
+
+                output.buffer.write.side_effect = write
+                with patch.object(Path, "read_text", return_value=json.dumps(config)), \
+                        patch.object(selector.shutil, "which", return_value="gst"), \
+                        patch.object(selector.threading, "Event", return_value=stop), \
+                        patch.object(selector.threading, "Thread", return_value=Mock(ident=1)), \
+                        patch.object(selector.signal, "signal"), \
+                        patch.object(selector.select, "select", return_value=([sys.stdin], [], [])), \
+                        patch.object(selector.os, "read", side_effect=read), \
+                        patch.object(selector, "State", return_value=state), \
+                        patch.object(sys, "stdout", output), \
+                        patch.object(selector.json, "dumps", side_effect=dumps):
+                    selector.main([])
+                self.assertEqual(state.selected, 1 if cancel_at == "read" else 2)
+                self.assertEqual(output.buffer.write.call_count, 1 if cancel_at == "write" else 0)
+
     def test_optional_buzzer_fault_boundary_preserves_reverse_and_video_work(self):
         state = selector.State(1, CAMERA)
         state.trigger("LEFT")
@@ -302,7 +436,7 @@ class ResourceFailureTests(unittest.TestCase):
             missing.set()
             raise OSError("optional JSON controller disconnected")
 
-        def launch(command):
+        def launch(command, **_options):
             commands.append(command)
             process = FakeProcess()
             processes.append(process)

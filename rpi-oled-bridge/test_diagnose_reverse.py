@@ -11,7 +11,7 @@ from unittest.mock import patch, Mock
 
 import diagnose_reverse as diagnostic
 import reverse_control as reverse
-from test_reverse_control import Clock, Port, CONFIG, ARGS
+from test_reverse_control import Clock, Port, CONFIG, ARGS, SimulatedDeviceIdentities
 
 
 SETTINGS = diagnostic.load_settings(diagnostic.DEFAULT_CONFIG)
@@ -229,6 +229,16 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(len(audit.errors), 2)
         self.assertEqual(audit.report(True)["checks"][-1]["status"], "FAIL")
 
+    def test_direct_candidate_close_failure_cannot_pass_diagnostic(self):
+        audit = diagnostic.Audit(CONFIG, SETTINGS)
+        raw = Mock()
+        raw.close.side_effect = OSError("candidate close failed")
+        port = diagnostic.ObservedPort(raw, "display", audit)
+        with self.assertRaises(OSError):
+            port.close()
+        self.assertEqual(audit.errors, ["display close: candidate close failed"])
+        self.assertEqual(audit.report(True)["checks"][-1]["status"], "FAIL")
+
     def test_cleanup_time_cannot_complete_an_expired_observation_window(self):
         clock = Clock()
         audit = diagnostic.Audit(CONFIG, SETTINGS, clock.now)
@@ -331,8 +341,9 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(check["status"], "FAIL")
 
 
-class SupervisionTests(unittest.TestCase):
+class SupervisionTests(SimulatedDeviceIdentities, unittest.TestCase):
     def setUp(self):
+        super().setUp()
         self.args = SimpleNamespace(config=diagnostic.DEFAULT_CONFIG,
             reverse_config=diagnostic.DEFAULT_REVERSE_CONFIG, sensor_port="sensor", display_port="display")
 

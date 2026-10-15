@@ -372,7 +372,10 @@ def player(state, config, stop, demo=False, headless=False):
                         if (stop.is_set() or state.selected != active
                                 or state.stop_generation != generation):
                             continue
-                    process = subprocess.Popen(arguments)
+                    # Capture must not inherit the optional command connection.
+                    # GStreamer diagnostics continue to use standard error.
+                    process = subprocess.Popen(arguments, stdin=subprocess.DEVNULL,
+                                               stdout=subprocess.DEVNULL)
                     with state.lock:
                         stale = (stop.is_set() or state.selected != active
                                  or state.stop_generation != generation)
@@ -448,17 +451,27 @@ class Lines:
         return result
 
 
-def responses(state, lines, data):
+def responses(state, lines, data, stop=None):
     """Frame incoming bytes and yield one newline-terminated JSON reply per command."""
     for line in lines.feed(data):
+        if stop is not None and stop.is_set():
+            break
         reply = ({"ok": False, "error": f"command exceeds {MAX_COMMAND_BYTES} bytes"} if line is None
                  else apply_message(state, line))
-        yield (json.dumps(reply) + "\n").encode()
+        packet = (json.dumps(reply) + "\n").encode()
+        # Preparing a reply may wait for state locks or be overtaken by shutdown.
+        if stop is not None and stop.is_set():
+            break
+        yield packet
 
 
 def serial_control(state, config, stop):
     """Serve local USB/UART commands, reopening the port after a disconnect."""
-    import serial
+    try:
+        import serial
+    except ImportError:
+        LOG.error("Optional serial control unavailable: install python3-serial and restart; camera playback continues")
+        return
     retry_delay = config.get("retry_delay_seconds", DEFAULTS["retry_delay_seconds"])
     baud = config.get("serial_baud", DEFAULTS["serial_baud"])
     read_timeout = config.get("serial_read_timeout_seconds", DEFAULTS["serial_read_timeout_seconds"])
@@ -471,7 +484,7 @@ def serial_control(state, config, stop):
                 LOG.info("Serial control ready on %s", config["serial_port"])
                 lines = Lines()
                 while not stop.is_set():
-                    for reply in responses(state, lines, port.read(SERIAL_READ_BYTES)):
+                    for reply in responses(state, lines, port.read(SERIAL_READ_BYTES), stop):
                         if port.write(reply) != len(reply):
                             raise OSError("Serial control reply was incomplete")
         except (OSError, serial.SerialException) as exc:
@@ -522,7 +535,8 @@ def main(argv=None):
 
     --check-config returns before dependency checks, imports or device access.
     Normal operation keeps playing if stdin closes (as it does under systemd).
-    SIGINT/SIGTERM or a broken output pipe asks all workers to shut down.
+    SIGINT/SIGTERM asks all workers to shut down. Command transport failures
+    disable that connection without stopping GPIO monitoring or playback.
     """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", type=Path, default=Path(__file__).with_name("config.json"))
@@ -544,11 +558,6 @@ def main(argv=None):
         return
     if not shutil.which("gst-launch-1.0"):
         parser.error("GStreamer is missing; install the packages listed in README.md")
-    if config.get("serial_port"):
-        try:
-            import serial
-        except ImportError:
-            parser.error("serial control needs python3-serial")
     try:
         for camera in range(1, CAMERA_COUNT + 1):
             command(config, camera, args.demo, args.headless)
@@ -585,17 +594,25 @@ def main(argv=None):
             if not stdin_open:
                 stop.wait(STDIN_POLL_SECONDS)
                 continue
-            ready, _, _ = select.select([sys.stdin], [], [], STDIN_POLL_SECONDS)
-            if ready:
-                data = os.read(sys.stdin.fileno(), STDIN_READ_BYTES)
+            try:
+                ready, _, _ = select.select([sys.stdin], [], [], STDIN_POLL_SECONDS)
+                data = os.read(sys.stdin.fileno(), STDIN_READ_BYTES) if ready else None
+            except (OSError, ValueError) as exc:
+                LOG.error("Stdin control unavailable: %s; camera playback continues", exc)
+                stdin_open = False
+                continue
+            if data is not None:
                 if not data:
                     stdin_open = False
-                for reply in responses(state, lines, data):
+                for reply in responses(state, lines, data, stop):
                     try:
-                        sys.stdout.buffer.write(reply)
+                        if sys.stdout.buffer.write(reply) != len(reply):
+                            raise OSError("Stdout control reply was incomplete")
                         sys.stdout.buffer.flush()
-                    except BrokenPipeError:
-                        stop.set()
+                    except (OSError, ValueError) as exc:
+                        LOG.error("Stdout control unavailable: %s; camera playback continues", exc)
+                        stdin_open = False
+                        break
     finally:
         stop.set()
         for worker in workers:

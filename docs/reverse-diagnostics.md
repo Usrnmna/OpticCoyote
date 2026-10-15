@@ -148,6 +148,9 @@ uniquely suffixed `.md` and `.json` files contain the same evidence, effective
 configuration, Python/platform information, USB paths, and SHA-256 hashes of
 the diagnostic, bridge, and reverse-control source files. Local configuration
 copies and default generated reports are ignored by Git.
+The workspace-level `reports/` directory is also ignored for explicitly selected
+review outputs. Other custom report destinations require an appropriate local
+ignore rule; authored reports intended for version control belong elsewhere.
 
 | Exit status | Meaning |
 | --- | --- |
@@ -158,10 +161,17 @@ copies and default generated reports are ignored by Git.
 A software-only exit status of zero establishes no hardware evidence. In
 hardware mode, unavailable drivers, GPIO setup errors, USB faults, or missing
 replies produce a failed/incomplete report. Duplicate, stale, or wrong-session
-replies cannot satisfy communication thresholds. The production lifecycle may
+replies cannot satisfy communication thresholds. The production bridge also
+requires Linux character-device identities for the opened sensor and each OLED
+candidate. A missing or conflicting OLED identity is reported as a display
+fault while sensor acquisition continues. Simulated identity checks establish
+protocol isolation only; they do not verify physical USB roles or serial-open
+reset behavior. The production lifecycle may
 retry the OLED independently while the sensor continues ranging. Open, poll,
 read, write, reset, and close failures remain recorded in the diagnostic;
-internal display-session failures, including silent ACK expiry, are retained
+this includes direct closure of a rejected or cancelled OLED candidate before
+it becomes an owned display link. Such cleanup errors prevent a complete PASS.
+Internal display-session failures, including silent ACK expiry, are retained
 explicitly even if a later idle reconnect supplies successful release writes.
 Additional acquisition attempts cannot be combined into a passing cycle. The
 audit keeps separate display ACK/request history and sensor freshness history.
