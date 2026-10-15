@@ -136,6 +136,17 @@ class BridgeTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     bridge.parse_args(["--list-ports", *options])
 
+    def test_different_device_nodes_with_same_driver_identity_are_rejected(self):
+        for mode, other_id, expected in ((bridge.stat.S_IFCHR, 123, True),
+                                         (bridge.stat.S_IFCHR, 124, False),
+                                         (bridge.stat.S_IFREG, 123, False)):
+            nodes = [SimpleNamespace(st_mode=mode, st_rdev=123),
+                     SimpleNamespace(st_mode=mode, st_rdev=other_id)]
+            with self.subTest(mode=mode, other_id=other_id), \
+                    patch.object(bridge.os.path, "samefile", return_value=False), \
+                    patch.object(bridge.os, "stat", side_effect=nodes):
+                self.assertEqual(bridge.same_device("sensor-node", "display-node"), expected)
+
     def test_pump_partial_input_periodic_start_and_stale_output(self):
         stop = FakeStop()
         sensor = FakePort(stop, [ROW[:10], ROW[10:] + b"\n", b"", b""])

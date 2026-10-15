@@ -1,0 +1,23 @@
+{
+  "enabled": false,
+  "hardware_type": "passive",
+  "gpio_pin": null,
+  "active_high": false,
+  "max_sequence_ms": 10000,
+  "sequences": {
+    "single_beep": {
+      "repeat": 1,
+      "steps": [
+        {"duration_ms": 120, "sound": true, "frequency_hz": 2000, "duty_cycle": 0.5}
+      ]
+    },
+    "double_beep": {
+      "repeat": 1,
+      "steps": [
+        {"duration_ms": 120, "sound": true, "frequency_hz": 2000, "duty_cycle": 0.5},
+        {"duration_ms": 120, "sound": false},
+        {"duration_ms": 120, "sound": true, "frequency_hz": 2000, "duty_cycle": 0.5}
+      ]
+    }
+  }
+}

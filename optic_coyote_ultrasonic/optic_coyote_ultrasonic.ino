@@ -1,6 +1,7 @@
 #include <Wire.h>
 #include <string.h>
 #include <stdio.h>
+#include "reverse_config.h"
 
 /*
   Four RCWL-1655 or compatible AJ-SR04M I2C ultrasonic sensors through a
@@ -19,10 +20,10 @@
     RCWL Trig/RX/SCL pin -> TCA9548A channel SCL
     RCWL Echo/TX/SDA pin -> TCA9548A channel SDA
 
-  USB serial is silent at boot. Send START followed by a newline to stream;
-  send STOP followed by a newline to stop. Commands use 115200 baud, 8N1.
-  Each successful read requests a cached four-zone CSV record. Pending updates
-  merge to the latest values while a previous packet is still being queued.
+  Reverse mode boots with ranging disabled and accepts session-tagged R/K/X
+  acquisition commands at 115200 baud, 8N1. reverse_config.h selects the mode.
+  Standalone mode ranges continuously; START/STOP control its legacy CSV output.
+  Pending updates merge while a previous packet is still being queued.
   Start manual review with Config, then serviceSensorPolling(), then
   serviceSerialOutput(). Function comments describe inputs and side effects.
 */
@@ -136,8 +137,8 @@ static_assert(Config::kAlarmPin == Design::kDisabledOutputPin ||
               "Alarm and heartbeat must use different enabled pins");
 
 // RUNTIME STATE: no user settings below this point.
-// History/cache survive failures. 'valid' describes the latest attempt for
-// alarm decisions; historyCount != 0 means a cached USB reading is available.
+// History/cache survive failures within one session. Reverse reports require a
+// valid, fresh latest attempt; standalone CSV can retain the last-good cache.
 struct SensorState {
   uint16_t historyMm[Design::kHistorySize];
   uint16_t latestDistanceMm;  // Fresh sample for USB; filtering is alarm-only.
@@ -148,6 +149,7 @@ struct SensorState {
   bool valid;
   uint32_t cooldownDeadlineMs;
   bool coolingDown;
+  uint32_t lastSuccessMs;
 };
 
 SensorState sensors[Config::kSensorCount] = {};  // All readings initially invalid.
@@ -166,7 +168,7 @@ uint32_t heartbeatDeadlineMs = 0;
 bool heartbeatState = false;
 bool streamingEnabled = false;
 uint32_t nextScanDeadlineMs = 0;
-char serialCommand[6] = {};  // START plus terminator; no dynamic allocation.
+char serialCommand[32] = {};  // Full acquisition command; no dynamic allocation.
 uint8_t serialCommandLength = 0;
 bool discardSerialCommand = false;
 
@@ -182,12 +184,30 @@ bool haveSentDistances = false;
 int32_t packetDistances[Config::kSensorCount] = {};
 int32_t sentDistances[Config::kSensorCount] = {};
 
+bool acquisitionEnabled = false;
+uint32_t reverseSessionToken = 0;
+uint32_t retiredReverseSessionToken = 0;  // Last stopped/replaced session.
+uint32_t reverseRequestId = 0;  // Latest strictly increasing K request; R uses zero.
+uint32_t reverseSessionStartedMs = 0;
+uint32_t reverseLeaseMs = 0;
+uint32_t reverseLeaseDeadlineMs = 0;
+uint32_t nextReverseReportMs = 0;
+bool restartGuardActive = false;
+uint32_t restartGuardDeadlineMs = 0;
+
 
 // DEADLINES AND I2C: select one sensor, trigger it, then read its result.
 // Return whether a millis() deadline has elapsed, including counter wraparound.
 // Intervals and time between servicing must remain below 2^31 milliseconds.
 bool deadlineReached(uint32_t now, uint32_t deadline) {
   return static_cast<int32_t>(now - deadline) >= 0;
+}
+
+// Recheck between bounded I2C operations so an expired lease cannot authorize
+// another trigger after a slow mux transaction.
+bool acquisitionPermitted(uint32_t now) {
+  return !ReverseConfig::kEnabled ||
+      (acquisitionEnabled && !deadlineReached(now, reverseLeaseDeadlineMs));
 }
 
 // Enable exactly one physical mux channel (0..7); return false on invalid input
@@ -216,6 +236,7 @@ bool startRanging(uint8_t sensorIndex) {
   if (!selectMuxChannel(Config::kMuxChannels[sensorIndex])) {
     return false;
   }
+  if (!acquisitionPermitted(millis())) return false;
 
   Wire.beginTransmission(Config::kSensorAddress);
   Wire.write(Design::kStartMeasurementCommand);
@@ -297,10 +318,17 @@ uint16_t medianOfHistory(const SensorState &sensor) {
 }
 
 // Store one accepted mm value for a logical index, refresh its filtered value,
-// clear its error count, and mark it valid. Older successful history is reused
-// even after failed attempts, so the first recovered output can include it.
+// clear its error count, and mark it valid. Reverse mode discards expired filter
+// history before recovery so old values cannot regain freshness in the alarm.
+// Standalone mode retains its original successful-history filtering behavior.
 void recordSuccessfulReading(uint8_t sensorIndex, uint16_t distanceMm) {
   SensorState &sensor = sensors[sensorIndex];
+  const uint32_t now = millis();
+  if (ReverseConfig::kEnabled && sensor.historyCount &&
+      static_cast<uint32_t>(now - sensor.lastSuccessMs) >= ReverseConfig::kStaleMs) {
+    sensor.historyCount = 0;
+    sensor.historyIndex = 0;
+  }
   sensor.latestDistanceMm = distanceMm;
   sensor.historyMm[sensor.historyIndex] = distanceMm;
   sensor.historyIndex = static_cast<uint8_t>(
@@ -313,12 +341,13 @@ void recordSuccessfulReading(uint8_t sensorIndex, uint16_t distanceMm) {
   sensor.filteredDistanceMm = medianOfHistory(sensor);
   sensor.consecutiveErrors = 0;
   sensor.valid = true;
-  if (streamingEnabled) serialReadingPending = true;
+  sensor.lastSuccessMs = now;
+  if (!ReverseConfig::kEnabled && streamingEnabled) serialReadingPending = true;
 }
 
 // Invalidate a logical sensor immediately and increment its diagnostic error
-// count. Retain its last raw distance for USB and its filter history. Failed
-// attempts do not generate packets and are excluded from alarm decisions.
+// count. Retain filter history and the standalone CSV cache. Reverse snapshots
+// mark the sensor unavailable until a new success; alarms exclude it immediately.
 void recordFailedReading(uint8_t sensorIndex) {
   SensorState &sensor = sensors[sensorIndex];
   if (sensor.consecutiveErrors < 255) {
@@ -335,7 +364,8 @@ int8_t findNearestSensor() {
   int8_t nearest = -1;
 
   for (uint8_t i = 0; i < Config::kSensorCount; ++i) {
-    if (!sensors[i].valid) {
+    if (!sensors[i].valid || (ReverseConfig::kEnabled &&
+        static_cast<uint32_t>(millis() - sensors[i].lastSuccessMs) >= ReverseConfig::kStaleMs)) {
       continue;
     }
 
@@ -349,7 +379,7 @@ int8_t findNearestSensor() {
   return nearest;
 }
 
-// OUTPUTS: update the alarm per attempt and send CSV per successful reading.
+// OUTPUTS: update alarms and transmit mode-specific snapshots without blocking.
 // Drive the configured alarm level for active/inactive, respecting polarity.
 // A disabled pin has no effect; this function does not decide alarm conditions.
 void setAlarm(bool active) {
@@ -367,12 +397,151 @@ int32_t cachedDistance(uint8_t index) {
   return sensors[index].historyCount ? static_cast<int32_t>(sensors[index].latestDistanceMm) : -1;
 }
 
-// Update the alarm independently of serial progress, including failed attempts.
+// Update the alarm independently of serial progress, excluding expired leases
+// and stale reverse samples as well as failed attempts.
 void updateAlarm() {
+  if (ReverseConfig::kEnabled && !acquisitionPermitted(millis())) {
+    setAlarm(false);
+    return;
+  }
   const int8_t nearest = findNearestSensor();
   setAlarm(nearest >= 0 &&
            sensors[static_cast<uint8_t>(nearest)].filteredDistanceMm <=
                Config::kWarningDistanceMm);
+}
+
+// Retain the latest physical conversion/cooldown deadline across cache resets.
+// A stopped conversion cannot be cancelled acoustically; its result is ignored.
+void retainRestartGuard(uint32_t now, uint32_t deadline) {
+  if (deadlineReached(now, deadline)) return;
+  if (!restartGuardActive || deadlineReached(now, restartGuardDeadlineMs) ||
+      static_cast<uint32_t>(deadline - now) >
+          static_cast<uint32_t>(restartGuardDeadlineMs - now)) {
+    restartGuardActive = true;
+    restartGuardDeadlineMs = deadline;
+  }
+}
+
+// Revoke acquisition, clear histories, silence the alarm, and isolate the mux.
+// Keep a partially queued packet intact through its newline. Its session token
+// allows the host to reject delayed bytes after the reverse view is released.
+void stopReverseAcquisition() {
+  const uint32_t now = millis();
+  if (acquisitionEnabled) retiredReverseSessionToken = reverseSessionToken;
+  if (pollPhase == PollPhase::kWaitForMeasurement) {
+    retainRestartGuard(now, phaseDeadlineMs + Config::kSensorCooldownMs);
+  }
+  for (uint8_t i = 0; i < Config::kSensorCount; ++i) {
+    if (sensors[i].coolingDown) retainRestartGuard(now, sensors[i].cooldownDeadlineMs);
+  }
+  acquisitionEnabled = false;
+  streamingEnabled = false;
+  memset(sensors, 0, sizeof(sensors));
+  pollPhase = PollPhase::kStartMeasurement;
+  currentSensor = 0;
+  serialHeaderPending = serialReadingPending = serialPacketIsCurrentData = false;
+  haveSentDistances = false;
+  if (serialPacketOffset == 0) serialPacketLength = 0;
+  setAlarm(false);
+  disableAllMuxChannels();
+}
+
+// Start a fresh session only. Repeated or retired tokens neither reset history
+// nor renew a lease; renewal requires an explicit K command while still active.
+void startReverseAcquisition(uint32_t token, uint32_t leaseMs) {
+  if (token == reverseSessionToken || token == retiredReverseSessionToken) return;
+  stopReverseAcquisition();
+  const uint32_t now = millis();
+  reverseSessionToken = token;
+  reverseRequestId = 0;
+  reverseSessionStartedMs = now;
+  reverseLeaseMs = leaseMs;
+  reverseLeaseDeadlineMs = now + leaseMs;
+  nextScanDeadlineMs = nextReverseReportMs = now;
+  acquisitionEnabled = true;
+}
+
+// Parse unsigned decimal fields without accepting signs, whitespace, overflow,
+// omitted digits, or extra fields. The cursor remains at the required separator.
+bool parseUnsignedField(const char *&cursor, uint32_t &value) {
+  value = 0;
+  if (*cursor < '0' || *cursor > '9') return false;
+  while (*cursor >= '0' && *cursor <= '9') {
+    const uint8_t digit = static_cast<uint8_t>(*cursor - '0');
+    if (value > (UINT32_MAX - digit) / 10UL) return false;
+    value = value * 10UL + digit;
+    ++cursor;
+  }
+  return true;
+}
+
+// Apply one complete command. Legacy START/STOP never enable reverse ranging.
+// A renewal arriving at or after expiry cannot resurrect the expired session.
+// K includes a strictly increasing nonzero request identifier. Replayed requests
+// do not extend a lease; snapshots echo the identifier frozen when prepared.
+void handleReverseCommand(const char *command) {
+  if (acquisitionEnabled && deadlineReached(millis(), reverseLeaseDeadlineMs)) {
+    stopReverseAcquisition();
+  }
+  if (strcmp(command, "X") == 0) {
+    stopReverseAcquisition();
+    return;
+  }
+  if ((command[0] != 'R' && command[0] != 'K') || command[1] != ',') return;
+  const char *cursor = command + 2;
+  uint32_t token = 0;
+  if (!parseUnsignedField(cursor, token) || token == 0) return;
+  if (command[0] == 'K') {
+    if (*cursor++ != ',') return;
+    uint32_t requestId = 0;
+    if (!parseUnsignedField(cursor, requestId) || *cursor != '\0' || requestId == 0) return;
+    if (acquisitionEnabled && token == reverseSessionToken && requestId > reverseRequestId) {
+      const uint32_t now = millis();
+      // Parsing can straddle a timer tick. Recheck at the renewal decision,
+      // rather than relying on the earlier command-entry expiry check.
+      if (deadlineReached(now, reverseLeaseDeadlineMs)) {
+        stopReverseAcquisition();
+        return;
+      }
+      reverseRequestId = requestId;
+      reverseLeaseDeadlineMs = now + reverseLeaseMs;
+    }
+    return;
+  }
+  if (*cursor++ != ',') return;
+  uint32_t leaseMs = 0;
+  if (!parseUnsignedField(cursor, leaseMs) || *cursor != '\0' ||
+      leaseMs < ReverseConfig::kMinimumLeaseMs ||
+      leaseMs > ReverseConfig::kMaximumLeaseMs) return;
+  startReverseAcquisition(token, leaseMs);
+}
+
+// Freeze a complete session snapshot, including unavailable sensors and the
+// last renewal request. Its echo bounds transport delay without synchronizing
+// device clocks; elapsed time permits duplicate/backward packet detection.
+void prepareReversePacket(uint32_t now) {
+  int32_t distance[Config::kSensorCount];
+  uint32_t age[Config::kSensorCount];
+  for (uint8_t i = 0; i < Config::kSensorCount; ++i) {
+    const uint32_t elapsed = now - sensors[i].lastSuccessMs;
+    const bool fresh = sensors[i].valid && elapsed < ReverseConfig::kStaleMs;
+    distance[i] = fresh ? sensors[i].latestDistanceMm : -1;
+    age[i] = fresh ? elapsed : 0;
+  }
+  const int length = snprintf(serialPacket, sizeof(serialPacket),
+      "S,%lu,%lu,%lu,%ld,%lu,%ld,%lu,%ld,%lu,%ld,%lu\r\n",
+      static_cast<unsigned long>(reverseSessionToken),
+      static_cast<unsigned long>(reverseRequestId),
+      static_cast<unsigned long>(now - reverseSessionStartedMs),
+      static_cast<long>(distance[0]), static_cast<unsigned long>(age[0]),
+      static_cast<long>(distance[1]), static_cast<unsigned long>(age[1]),
+      static_cast<long>(distance[2]), static_cast<unsigned long>(age[2]),
+      static_cast<long>(distance[3]), static_cast<unsigned long>(age[3]));
+  if (length <= 0 || static_cast<size_t>(length) >= sizeof(serialPacket)) return;
+  serialPacketLength = static_cast<uint16_t>(length);
+  serialPacketOffset = 0;
+  serialPacketIsCurrentData = false;
+  nextReverseReportMs = now + ReverseConfig::kReportIntervalMs;
 }
 
 // Compare distance values only, not the timestamp (which always changes).
@@ -424,9 +593,15 @@ void prepareSerialPacket() {
 // "Sent" here means queued to the UART, not acknowledged by the USB host.
 void serviceSerialOutput() {
   if (serialPacketLength == 0) {
-    if (!streamingEnabled || (!serialHeaderPending && !serialReadingPending &&
-                             !distancesChangedSinceSend())) return;
-    prepareSerialPacket();
+    if (ReverseConfig::kEnabled) {
+      const uint32_t now = millis();
+      if (!acquisitionPermitted(now) || !deadlineReached(now, nextReverseReportMs)) return;
+      prepareReversePacket(now);
+    } else {
+      if (!streamingEnabled || (!serialHeaderPending && !serialReadingPending &&
+                               !distancesChangedSinceSend())) return;
+      prepareSerialPacket();
+    }
   }
   if (serialPacketLength == 0) return;
   const int capacity = Serial.availableForWrite();
@@ -444,7 +619,7 @@ void serviceSerialOutput() {
   serialPacketIsCurrentData = false;
 }
 
-// Accept exact uppercase START/STOP terminated by CR, LF, or CRLF.
+// Accept complete acquisition or legacy commands terminated by CR, LF, or CRLF.
 // Ignore unknown, binary, and oversized lines in full; a suffix cannot execute.
 // Bound work per loop so a busy host cannot starve sensing.
 void serviceSerialCommands() {
@@ -453,7 +628,9 @@ void serviceSerialCommands() {
     if (input == '\r' || input == '\n') {
       if (!discardSerialCommand) {
         serialCommand[serialCommandLength] = '\0';
-        if (strcmp(serialCommand, "START") == 0 && !streamingEnabled) {
+        if (ReverseConfig::kEnabled) {
+          handleReverseCommand(serialCommand);
+        } else if (strcmp(serialCommand, "START") == 0 && !streamingEnabled) {
           streamingEnabled = true;
           serialHeaderPending = true;
           serialReadingPending = false;
@@ -471,7 +648,9 @@ void serviceSerialCommands() {
       serialCommandLength = 0;
       discardSerialCommand = false;
     } else if (!discardSerialCommand) {
-      if (input < 'A' || input > 'Z' ||
+      const bool permitted = (input >= 'A' && input <= 'Z') ||
+          (ReverseConfig::kEnabled && ((input >= '0' && input <= '9') || input == ','));
+      if (!permitted ||
           serialCommandLength >= sizeof(serialCommand) - 1) {
         discardSerialCommand = true;
       } else {
@@ -495,9 +674,19 @@ void finishCurrentSensor() {
 }
 
 // Advance at most one polling phase using the supplied millis() timestamp.
-// Conversion/guard waits use deadlines. Wire calls can still block; this
-// sketch configures no board-specific I2C timeout or recovery.
+// Conversion/guard waits use deadlines. Supported Wire implementations bound
+// bus operations with the timeout configured in setup().
 void serviceSensorPolling(uint32_t now) {
+  if (ReverseConfig::kEnabled) {
+    if (!acquisitionPermitted(now)) {
+      if (acquisitionEnabled) stopReverseAcquisition();
+      return;
+    }
+    if (restartGuardActive) {
+      if (!deadlineReached(now, restartGuardDeadlineMs)) return;
+      restartGuardActive = false;
+    }
+  }
   switch (pollPhase) {
     case PollPhase::kStartMeasurement:
       if (sensors[currentSensor].coolingDown &&
@@ -526,6 +715,11 @@ void serviceSensorPolling(uint32_t now) {
       if (deadlineReached(now, phaseDeadlineMs)) {
         uint16_t distanceMm = 0;
         const bool readingReturned = readDistanceMm(distanceMm);
+        if (!acquisitionPermitted(millis())) {
+          retainRestartGuard(millis(), millis() + Config::kSensorCooldownMs);
+          stopReverseAcquisition();
+          return;
+        }
         if (readingReturned) {
           recordSuccessfulReading(currentSensor, distanceMm);
         } else {
@@ -535,6 +729,7 @@ void serviceSensorPolling(uint32_t now) {
       }
       break;
   }
+  if (ReverseConfig::kEnabled && !acquisitionPermitted(millis())) stopReverseAcquisition();
 }
 
 // Toggle the enabled heartbeat output when due, then schedule from now.
@@ -555,7 +750,8 @@ void serviceHeartbeat(uint32_t now) {
 
 // ARDUINO ENTRY POINTS.
 // Arduino startup: configure outputs and buses, request mux isolation, and
-// remain silent until START. No sensor availability check is made here.
+// remain inactive until a reverse session (or silent until legacy START).
+// No sensor availability check is made here.
 void setup() {
   if (Config::kHeartbeatPin != Design::kDisabledOutputPin) {
     pinMode(Config::kHeartbeatPin, OUTPUT);
@@ -568,6 +764,9 @@ void setup() {
   Serial.begin(Config::kSerialBaud);
   Wire.begin();
   Wire.setClock(Config::kI2cClockHz);
+#if defined(WIRE_HAS_TIMEOUT)
+  Wire.setWireTimeout(ReverseConfig::kI2cTimeoutUs, true);
+#endif
 
   disableAllMuxChannels();
 }
@@ -578,6 +777,7 @@ void loop() {
   serviceSerialCommands();
   const uint32_t now = millis();
   serviceSensorPolling(now);
+  if (ReverseConfig::kEnabled) updateAlarm();
   serviceHeartbeat(now);
   serviceSerialOutput();
 

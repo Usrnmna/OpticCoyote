@@ -7,6 +7,15 @@ venv/
 .coverage
 htmlcov/
 
+# Optional installation-specific selector tuning; retain config.json as the audited default.
+/rpi-ahd-selector/config.local.json
+/rpi-ahd-selector/diagnostic.local.json
+/rpi-ahd-selector/diagnostic-reports/
+/rpi-oled-bridge/reverse.local.json
+/rpi-oled-bridge/reverse-diagnostic.local.json
+/rpi-oled-bridge/diagnostic-reports/
+/rpi-buzzer/buzzer.local.json
+
 # Local build directories and Arduino-generated firmware exports.
 build/
 .build/

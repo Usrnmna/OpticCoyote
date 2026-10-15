@@ -80,8 +80,11 @@ def send_serial_command(message, device, baud, timeout):
     """
     import serial
 
-    with serial.Serial(device, baud, timeout=timeout, write_timeout=timeout) as port:
-        port.write(message.encode("utf-8"))
+    with serial.Serial(device, baud, timeout=timeout, write_timeout=timeout,
+                       exclusive=True) as port:
+        packet = message.encode("utf-8")
+        if port.write(packet) != len(packet):
+            raise OSError("Serial control command was incomplete")
         reply = port.read_until(b"\n", size=MAX_REPLY_BYTES)
     if not reply.endswith(b"\n"):
         raise ValueError("No complete acknowledgement received")

@@ -8,11 +8,18 @@
 #include <algorithm>
 
 #define F(value) value
+#define WIRE_HAS_TIMEOUT 1
 constexpr uint8_t HIGH = 1, LOW = 0, OUTPUT = 1, LED_BUILTIN = 13;
 extern uint32_t fakeNow;
-inline uint32_t millis() { return fakeNow; }
+inline uint32_t &millisAdvancePerRead() { static uint32_t value = 0; return value; }
+inline uint32_t millis() {
+  const uint32_t now = fakeNow;
+  fakeNow += millisAdvancePerRead();
+  return now;
+}
 inline void pinMode(uint8_t, uint8_t) {}
-inline void digitalWrite(uint8_t, uint8_t) {}
+inline uint8_t *pinLevels() { static uint8_t values[256] = {}; return values; }
+inline void digitalWrite(uint8_t pin, uint8_t value) { pinLevels()[pin] = value; }
 
 struct FakeSerial {
   std::deque<char> input;
@@ -48,6 +55,9 @@ struct FakeWire {
   uint8_t failMask = 0;
   uint8_t readFailMask = 0, invalidMask = 0, shortMask = 0;
   uint32_t readDelayMs = 0;
+  uint32_t muxDelayMs = 0;
+  uint32_t timeoutUs = 0;
+  bool resetOnTimeout = false;
   uint32_t lastReadFinished[4] = {};
   unsigned successfulReads = 0;
   bool hasRead[4] = {};
@@ -55,12 +65,17 @@ struct FakeWire {
   std::deque<uint8_t> response;
   void begin() {}
   void setClock(uint32_t) {}
+  void setWireTimeout(uint32_t timeout, bool reset) {
+    timeoutUs = timeout;
+    resetOnTimeout = reset;
+  }
   void beginTransmission(uint8_t target) { address = target; }
   void write(uint8_t byte) { value = byte; }
   uint8_t endTransmission() {
     if (address == 0x70) {
       selected = -1;
       for (int i = 0; i < 4; ++i) if (value == (1U << i)) selected = i;
+      if (selected >= 0) fakeNow += muxDelayMs;
     } else {
       assert(address == 0x57 && selected >= 0 && value == 1);
       if (hasRead[selected]) assert(static_cast<uint32_t>(fakeNow - lastReadFinished[selected]) >= 10);

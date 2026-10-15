@@ -2,11 +2,13 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include "display_protocol.h"
+#include "reverse_protocol.h"
 
 /*
   Display-only ELEGOO Nano / ATmega328P, connected to the Pi by USB.
   The sensor Nano keeps optic_coyote_ultrasonic.ino. This second Nano receives
-  D,mm1,mm2,mm3,mm4 and shows rear-bumper sensors 1..4 from left to right.
+  leased reverse commands and shows rear-bumper sensors 1..4 left to right.
+  The default idle view is blank; the OLED remains available for other content.
   OLED: SSD1306, 128x32, I2C SDA=A4, SCL=A5. See docs/oled-display.md for power.
   Libraries: Adafruit SSD1306, Adafruit GFX Library, Adafruit BusIO.
 */
@@ -32,12 +34,16 @@ static_assert(Config::kRefreshIntervalMs >= 100,
 
 Adafruit_SSD1306 oled(128, 32, &Wire, Config::kOledResetPin);
 DisplayProtocol::Receiver receiver;
+ReverseDisplayProtocol::Receiver reverseReceiver;
 bool havePacket = false;
 bool oledReady = false;
 uint32_t lastPacketMs = 0;
 uint32_t lastRefreshMs = 0;
 uint32_t lastOledAttemptMs = 0;
 char paintedValues[4][5] = {};
+enum class DisplayMode : uint8_t { Unpainted, Idle, ReverseDistance };
+DisplayMode paintedMode = DisplayMode::Unpainted;
+uint32_t paintedToken = 0;
 
 // Check the address separately: Adafruit begin() reports allocation success,
 // which alone does not establish that a display answered on the I2C bus.
@@ -56,45 +62,75 @@ void initializeOled(uint32_t now) {
   oled.setTextWrap(false);
   oled.setTextColor(SSD1306_WHITE);
   memset(paintedValues, 0, sizeof(paintedValues));
+  paintedMode = DisplayMode::Unpainted;
+  paintedToken = 0;
   oledReady = true;
 }
 
 // Consume at most one UART buffer per loop. No String allocation, blocking
 // readStringUntil, or per-byte screen transfer; partial lines survive loops.
-void receiveDistances(uint32_t now) {
-  uint8_t budget = 64;
+// Each byte uses its consumption time, so a command completed at an expired
+// deadline cannot renew ownership using an earlier loop-entry timestamp.
+void receiveDistances() {
+  uint8_t budget = ReverseConfig::kReceiveBudgetBytes;
   while (budget-- && Serial.available() > 0) {
-    if (receiver.feed(static_cast<char>(Serial.read()))) {
+    const char byte = static_cast<char>(Serial.read());
+    const uint32_t now = millis();
+    if (ReverseConfig::kEnabled) {
+      reverseReceiver.feed(byte, now);
+    } else if (receiver.feed(byte)) {
       havePacket = true;
       lastPacketMs = now;
     }
   }
 }
 
+// ACK writes are short and nonblocking. A congested UART retains only the
+// latest active token/request pair; release or expiry cancels a pending ACK.
+void sendReverseAcknowledgement() {
+  reverseReceiver.expire(millis());
+  if (!ReverseConfig::kEnabled || !reverseReceiver.pendingAckToken) return;
+  char acknowledgement[25];  // A,UINT32_MAX,UINT32_MAX plus LF and NUL.
+  const int length = snprintf(acknowledgement, sizeof(acknowledgement),
+      "A,%lu,%lu\n", static_cast<unsigned long>(reverseReceiver.pendingAckToken),
+      static_cast<unsigned long>(reverseReceiver.pendingAckRequestId));
+  const int availableBytes = Serial.availableForWrite();
+  reverseReceiver.expire(millis());
+  if (availableBytes < length || !reverseReceiver.pendingAckToken) return;
+  Serial.write(reinterpret_cast<const uint8_t *>(acknowledgement), length);
+  reverseReceiver.pendingAckToken = 0;
+  reverseReceiver.pendingAckRequestId = 0;
+}
+
+// Idle owns the powered OLED outside reverse. Future content can draw here and
+// return true when its buffer changed; returning false avoids redundant I2C
+// transfers. The current implementation clears the previous view once.
+bool renderIdle(uint32_t now) {
+  (void)now;
+  if (paintedMode == DisplayMode::Idle) return false;
+  oled.clearDisplay();
+  return true;
+}
+
 // Four fixed 32-pixel columns. The default font is 6 pixels wide; even "98.4"
 // fits with margins. Doubling height makes values 16 pixels tall without
 // reducing the four-value layout. Missing/stale input is visibly unavailable.
-void refreshOled(uint32_t now) {
-  if (!oledReady) {
-    if (static_cast<uint32_t>(now - lastOledAttemptMs) >= Config::kOledRetryMs)
-      initializeOled(now);
-    return;
-  }
-  if (static_cast<uint32_t>(now - lastRefreshMs) < Config::kRefreshIntervalMs)
-    return;
-  lastRefreshMs = now;
-  if (!oledResponds()) {
-    oledReady = false;
-    lastOledAttemptMs = now;
-    return;
-  }
-  const bool fresh = havePacket &&
-      static_cast<uint32_t>(now - lastPacketMs) < Config::kLinkTimeoutMs;
-  char values[4][5];
+bool renderReverseDistance(uint32_t now, char (&values)[4][5]) {
+  const bool packetAvailable = ReverseConfig::kEnabled
+      ? reverseReceiver.havePacket : havePacket;
+  const uint32_t packetMs = ReverseConfig::kEnabled
+      ? reverseReceiver.lastPacketMs : lastPacketMs;
+  const int32_t *distances = ReverseConfig::kEnabled
+      ? reverseReceiver.distances : receiver.distances;
+  const bool fresh = packetAvailable &&
+      static_cast<uint32_t>(now - packetMs) < Config::kLinkTimeoutMs;
   for (uint8_t sensor = 0; sensor < 4; ++sensor)
-    DisplayProtocol::formatFeet(fresh ? receiver.distances[sensor] : -1,
+    DisplayProtocol::formatFeet(fresh ? distances[sensor] : -1,
                                 values[sensor]);
-  if (memcmp(values, paintedValues, sizeof(values)) == 0) return;
+  const bool sameSession = !ReverseConfig::kEnabled ||
+      paintedToken == reverseReceiver.token;
+  if (sameSession && paintedMode == DisplayMode::ReverseDistance &&
+      memcmp(values, paintedValues, sizeof(values)) == 0) return false;
 
   oled.clearDisplay();
   for (uint8_t sensor = 0; sensor < 4; ++sensor) {
@@ -110,14 +146,64 @@ void refreshOled(uint32_t now) {
   oled.setCursor(58, 25);
   // Values occupy y=11..24 (seven glyph rows doubled); unit fits y=25..31.
   oled.print(F("ft"));
-  Wire.clearWireTimeoutFlag();
-  oled.display();
-  if (Wire.getWireTimeoutFlag() || !oledResponds()) {
+  return true;
+}
+
+// Ownership chooses one renderer. Initialization, failed transfers and mode
+// changes invalidate the cached view, including when distance values repeat.
+void refreshOled() {
+  uint32_t now = millis();
+  reverseReceiver.expire(now);
+  if (!oledReady) {
+    if (static_cast<uint32_t>(now - lastOledAttemptMs) >= Config::kOledRetryMs)
+      initializeOled(now);
+    reverseReceiver.expire(millis());
+    return;
+  }
+  if (static_cast<uint32_t>(now - lastRefreshMs) < Config::kRefreshIntervalMs)
+    return;
+  lastRefreshMs = now;
+  const bool responds = oledResponds();
+  now = millis();
+  reverseReceiver.expire(now);
+  if (!responds) {
     oledReady = false;
     lastOledAttemptMs = now;
     return;
   }
-  memcpy(paintedValues, values, sizeof(values));
+  DisplayMode mode = !ReverseConfig::kEnabled || reverseReceiver.active
+      ? DisplayMode::ReverseDistance : DisplayMode::Idle;
+  char values[4][5];
+  const bool changed = mode == DisplayMode::Idle ? renderIdle(now)
+      : renderReverseDistance(now, values);
+  if (!changed) return;
+  now = millis();
+  reverseReceiver.expire(now);
+  if (mode == DisplayMode::ReverseDistance && ReverseConfig::kEnabled &&
+      !reverseReceiver.active) {
+    // Discard a distance buffer whose ownership expired while it was drawn.
+    paintedMode = DisplayMode::Unpainted;
+    renderIdle(now);
+    mode = DisplayMode::Idle;
+  }
+  const uint32_t renderedToken = reverseReceiver.token;
+  Wire.clearWireTimeoutFlag();
+  oled.display();
+  const bool failed = Wire.getWireTimeoutFlag() || !oledResponds();
+  now = millis();
+  reverseReceiver.expire(now);
+  if (failed) {
+    oledReady = false;
+    lastOledAttemptMs = now;
+    return;
+  }
+  if (mode == DisplayMode::ReverseDistance)
+    memcpy(paintedValues, values, sizeof(values));
+  paintedMode = mode;
+  paintedToken = mode == DisplayMode::ReverseDistance && ReverseConfig::kEnabled
+      ? renderedToken : 0;
+  // An I2C transfer already underway cannot be recalled. Expiry during that
+  // transfer releases ownership here; the next scheduled refresh paints idle.
 }
 
 void setup() {
@@ -128,7 +214,8 @@ void setup() {
 }
 
 void loop() {
-  const uint32_t now = millis();
-  receiveDistances(now);
-  refreshOled(now);
+  reverseReceiver.expire(millis());
+  receiveDistances();
+  sendReverseAcknowledgement();
+  refreshOled();
 }

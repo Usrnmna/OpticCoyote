@@ -2,7 +2,17 @@
 
 This is the assembly-level reference for Project Optic Coyote. It covers the
 implemented ultrasonic-to-OLED USB path, the independent AHD camera path, and
-the separately maintained GPIO camera-warning draft.
+the separately maintained GPIO camera-warning draft. Reverse control adds one
+protected Pi input to gate sensor acquisition and OLED distance ownership.
+
+An [optional Pi buzzer](pi-buzzer.md) adds one GPIO logic output for later
+explicitly defined calls. The specified DIYables `DIY-BUZZER-MODULE-PASSIVE-5`
+module uses **3.3 V DC** on `VCC`, common ground on `GND`, and a configurable
+GPIO logic signal on `I/O`. Passive PWM and active-low polarity are the defaults;
+playback remains disabled with the BCM pin unassigned. The
+[buzzer reference](pi-buzzer.md) records product links, printed labels, OFF bias,
+and unverified electrical behavior. Active-buzzer rhythms remain supported.
+This output is separate from the sensor Nano's D8 alarm.
 
 Use [component pinouts](component-pinouts.md) to identify board signals and chip
 pins. Use [the sensor reference](nano-ultrasonic-pinout.md) for sensor setup and
@@ -21,14 +31,14 @@ reference designators.
 
 | ID | Part | Project role |
 | --- | --- | --- |
-| P1 | Raspberry Pi 4 or 5 | USB host; distance bridge and independent camera selector |
+| P1 | Raspberry Pi 5, 4 GB RAM | USB host; distance bridge and independent camera selector |
 | N1 | ELEGOO Nano, ATmega328P + CH340 | Polls the four ultrasonic sensors |
 | M1 | TCA9548A breakout | Isolates four sensors sharing I2C address `0x57` |
 | S1-S4 | RCWL-1655 or protocol-compatible AJ-SR04M modules | Rear-bumper distances, numbered left to right on the OLED |
 | N2 | Second ELEGOO Nano of the same type | Receives distance packets and drives the OLED |
 | O1 | 0.91-inch SSD1306 128x32 I2C OLED module | Four distance columns in decimal feet |
-| C1-C4 | AHD cameras | Four independently selectable video inputs |
-| V1-V4 | AHD-capable USB capture interfaces | Supply four Linux V4L2 camera streams |
+| C1-C4 | GreenYi AHD cameras, [ASIN B0C3R5Y7K1](https://www.amazon.com/GreenYi-Reverse-Trailer-Adjustable-Fisheye/dp/B0C3R5Y7K1) | Four independently selectable video inputs; camera identity does not establish electrical specifications or tested operation |
+| V1-V4 | GRACETOP AHD-to-USB-A 2.0 adapters, ASIN B0DZ2HT7TD | Intended independent V4L2 feeds; listing model GTDE-ABV2USBC, part GTUS-AHD2USB; hardware operation unverified |
 | H1 | Powered USB hub for camera interfaces | Expands Pi host ports; power/bandwidth must fit the actual devices |
 | D1 | HDMI monitor | Shows the selected camera; separate from O1 |
 
@@ -55,7 +65,7 @@ Rear bumper / sensor order used on the OLED:
                                  |
                        USB-A <-> USB-C data cable
                                  |
-                    P1 Raspberry Pi USB-A host port
+                    P1 Raspberry Pi 5 (4 GB) USB-A host port
                     rpi-oled-bridge/bridge.py
                     another USB-A host port
                                  |
@@ -89,13 +99,13 @@ Independent camera path on the same Pi:
 ```
 
 Each Nano remains a USB device; P1 is the host for both. Power and ground wiring
-are shown separately below. No Pi GPIO or Pi I2C wires are required for the
-ultrasonic/OLED path. The Pi's USB-C **power input** is not the outgoing host
+are shown separately below. Reverse control additionally requires the protected
+GPIO input; the ultrasonic/OLED links use USB rather than Pi I2C. The Pi's USB-C **power input** is not the outgoing host
 connection to N2. Choose the two physical USB-A ports and record their Linux
-device paths as explained in [USB port identification](oled-display.md#run-the-pi-bridge).
+device paths as explained in [USB port identification](oled-display.md#run-the-pi-bridge-in-standalone-mode).
 
 The distance bridge does not select a camera. The camera selector's serial
-control expects JSON, whereas N1 emits distance CSV. The configured selector
+control expects JSON, whereas N1 emits tagged sensor snapshots or standalone CSV. The configured selector
 GPIO inputs and serial port are currently disabled.
 
 ## Sensor branch: N1, M1, and S1-S4
@@ -249,11 +259,31 @@ not established by firmware or these text diagrams.
 | H1 upstream USB | P1 USB host | Hub data connection |
 | P1 HDMI output used by the selector | D1 HDMI input | Appropriate cable for the Pi's connector |
 
-If the selected adapters use standard BNC coax video, the center contact is the
-video signal and the outer contact is its shield/return. This does not identify
-the pins of an unknown four-pin automotive camera connector, camera power plug,
-or combined power/video harness. Obtain the selected camera/adapter pinout
-before terminating those cables; no specific models are established here.
+The AHD sources are the GreenYi cameras identified by
+[Amazon ASIN B0C3R5Y7K1](https://www.amazon.com/GreenYi-Reverse-Trailer-Adjustable-Fisheye/dp/B0C3R5Y7K1),
+including the left and right camera views. The
+[camera identity reference](../README.md#greenyi-camera-identity) records the
+listing-verification limits. Camera revision, harness pinout, supply, and native
+frame rate remain subject to confirmation; the capture adapter's MJPEG 60 fps
+mode is not evidence of the camera's native exposure rate.
+
+The selected capture adapter is the GRACETOP USB-A variant,
+[Amazon ASIN B0DZ2HT7TD](https://www.amazon.com/dp/B0DZ2HT7TD?th=1), with listing
+model `GTDE-ABV2USBC` and manufacturer part number `GTUS-AHD2USB`. The
+[GRACETOP product page](https://www.gracetop.com/products/433t54w43) advertises
+a 1.25 mm four-pin input connector with 5 V output, ground, video input, and
+audio input. These are advertised signal functions, not a verified pin order
+for the received board or cable. Shared listing text also names USB-C; the
+installation variant is USB-A 2.0. Inspect the actual connector and PCB labels.
+
+Do not assume a BNC connector on the adapter. Any camera-side BNC connection or
+automotive harness requires a separately verified transition to the module's
+video input and return. Camera revisions, harness lead order, required supply
+voltage, and the adapter's 5 V output capacity remain unverified. Keep camera
+power separate unless the complete supply requirements are established.
+The [adapter specification and Pi verification reference](../README.md#gracetop-adapter-identity-and-advertised-specifications)
+distinguishes listing claims from hardware evidence and provides MJPEG 720p60
+checks for P1, the Raspberry Pi 5 with 4 GB RAM.
 
 One multi-input capture unit can replace the four logical V1-V4 interfaces only
 when it exposes four independent usable feeds to the existing software. A
@@ -262,6 +292,85 @@ combined quad-view image does not meet that interface. The supplied
 `/dev/video2`, `/dev/video4`, and `/dev/video6` as placeholders; identify the actual
 devices before assigning camera numbers. The [camera setup](../README.md#ahd-camera-selection-raspberry-pi)
 describes capture requirements and stable device paths.
+
+## Reverse trigger input
+
+Connect the reverse-light signal through a protected automotive-voltage sensing
+interface to the manually assigned Pi BCM input. The pin is intentionally
+unassigned in [reverse.json](../rpi-oled-bridge/reverse.json). Confirm that the
+chosen pin does not overlap active blinker, draft, or peripheral pins.
+Vehicle voltage must never reach Pi GPIO; the conditioned output must be
+3.3 V-compatible with a defined inactive state.
+
+```text
+Reverse-light ON voltage -> protected sensing interface -> Pi reverse GPIO
+Pi USB -> N1 sensor Nano -> M1 -> S1-S4 (ranging only during active reverse lease)
+Pi USB -> N2 display Nano -> O1 (distance mode during reverse; idle renderer otherwise)
+```
+
+Keep the sensor and display supplies continuous. LOW stops new ranging through
+USB and releases the powered OLED for other content. Both updated Nano sketches
+are required; the older sensor START/STOP protocol only controls serial output.
+See [reverse setup, timing, protocol, and verification](reverse-trigger.md).
+GPIO protection, vehicle wiring, stop latency, and physical idle behavior remain
+subject to bench verification.
+
+## Optional blinker trigger inputs
+
+The Pi camera selector supports an optional two-input trigger mode, configured
+in [config.json](../rpi-ahd-selector/config.json). This path is independent of
+the sensor and OLED Nanos. It requires two external protected voltage-sensing
+channels; those interface components and the vehicle harness have not been
+selected or electrically validated.
+
+```text
+Left blinker ON voltage  --> protected sensing channel --> Pi left GPIO
+Right blinker ON voltage --> protected sensing channel --> Pi right GPIO
+
+Camera power --> camera-rated regulated supply, independent of blink pulses
+AHD video   --> existing AHD capture interfaces --> Pi USB --> HDMI display
+```
+
+| Signal | Configurable default BCM pin | Physical header pin | Logical role |
+| --- | --- | --- | --- |
+| Conditioned left trigger | GPIO17 | 11 | Select mapped left camera |
+| Conditioned right trigger | GPIO27 | 13 | Select mapped right camera |
+
+These pins overlap the separate four-wire GPIO draft. Trigger mode requires
+`gpio_pins: []`; do not run the draft listener or another GPIO owner on the
+trigger pins. Confirm the selected pins are available on the installed Pi.
+
+**Vehicle voltage must never connect directly to Pi GPIO.** Inputs are 3.3 V
+tolerant; see the [Raspberry Pi voltage specifications](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#voltage-specifications).
+Use an interface with suitable voltage thresholds, current limiting, transient
+and reverse-voltage protection, filtering, and a defined inactive output.
+An optically isolated interface can provide the signal boundary if its complete
+input circuit is rated for the vehicle environment. The existing Arduino NPN
+draft below is not a validated automotive-voltage input circuit.
+
+Determine nominal system voltage, maximum operating voltage, switching polarity,
+PWM/diagnostic pulse behavior, and input loading limits before selecting the
+interface. Reference its vehicle side to the correct lamp return according to
+the vehicle wiring. For isolation, preserve the interface's intended separation;
+for a nonisolated interface, establish a suitable common signal reference.
+Never pull the Pi-side output up to vehicle voltage or 5 V.
+
+`trigger_active_low: false` uses Pi pull-downs with conditioned 3.3 V HIGH active.
+An inverting open-collector interface uses `trigger_active_low: true` with
+Pi-side pull-ups to 3.3 V. Both channels use the same configured polarity.
+Blinker ON remains logical activity regardless of physical inversion.
+
+Keep cameras powered from their specified supply while the system is operating;
+the trigger selects capture rather than repeatedly switching camera power.
+Only one mapped camera capture runs at a time. BOTH and expired all-LOW inputs
+stop camera capture and request generated black output. The
+[trigger setup and timing reference](../README.md#blinker-trigger-mode) describes
+OFF-gap retention, hazard skew, GPIO fault handling, and bench verification.
+Hold tuning must allow the OFF gap plus qualification of the next ON pulse and
+a sampling/scheduling margin. Once an OFF timer is armed, unqualified input
+chatter cannot postpone its expiry. BOTH requests software capture termination;
+an operating-system launch already in progress may briefly open a device before
+it can be terminated. This GPIO path is not a hardware capture interlock.
 
 ## Optional GPIO camera-warning draft
 
@@ -306,12 +415,14 @@ not part of the implemented wiring shown here.
 
 ## Verification boundary
 
-I checked the signal assignments against the current sensor/display sketches,
-Pi bridge, camera configuration, GPIO draft, and the manufacturer references
-linked in these documents. This work does not verify a physical assembly.
+Signal assignments are derived from the sensor/display sketches, Pi bridge,
+camera configuration, GPIO draft, and linked manufacturer references. This
+documentation does not verify a physical assembly or automotive input circuit.
 
 Before connecting power, confirm the exact board labels, ground continuity,
 supply ratings, pull-ups, and address straps. Then verify each sensor's cable
 and screen column independently, followed by the two USB roles and camera
-device assignments. N1's cached CSV has no individual sensor ages; a failed
-sensor can retain an old displayed distance while others continue reporting.
+device assignments. Reverse snapshots carry individual sensor ages and request
+identifiers; verify stale-data rejection and inactive ranging on hardware.
+Standalone CSV has no individual sensor ages, so a failed sensor can retain an
+old displayed distance while others continue reporting.

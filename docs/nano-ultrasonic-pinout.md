@@ -26,7 +26,7 @@ been bench-tested in this project.
 
 ## Rear-bumper OLED installation
 
-The Pi can forward this sensor Nano's CSV to a second ELEGOO Nano driving
+The Pi forwards reverse snapshots or standalone CSV to a second Nano driving
 the SSD1306 display; see the [OLED setup guide](oled-display.md). The
 sensor wiring below is unchanged. In the rear-bumper installation, sensors
 1-4 are all on the rear bumper, ordered left to right on the OLED. The
@@ -38,7 +38,7 @@ requirements. The Pi bridge can remap the four column positions.
 ```text
 RASPBERRY PI / USB HOST
         | USB data cable (USB-A to board's USB-C connector)
-        | Commands down / distance CSV up
+        | Commands down / distance snapshots up
         v
   NANO: ATmega328P / CH340                    TCA9548A
   +---------------------------+          +-------------------------+
@@ -164,6 +164,14 @@ required for this USB interface.
 
 ## USB serial interface
 
+Default builds use [reverse-triggered acquisition](reverse-trigger.md): the
+sensors boot idle, R/K/X controls actual ranging, and snapshots include session
+and request identifiers plus individual sample ages. The protected reverse
+GPIO connects to the Pi; the Nano wiring remains as specified above.
+
+The following START/STOP CSV reference applies only when
+`OPTIC_COYOTE_STANDALONE=1` is selected in the sensor configuration header.
+
 | Property | Firmware behavior |
 | --- | --- |
 | Serial settings | 115200 baud, 8 data bits, no parity, 1 stop bit |
@@ -196,7 +204,7 @@ This protects values already captured by the Nano. The existing I2C mode still r
 
 ## Per-reading timing and cooldown
 
-The current I2C implementation triggers one sensor, waits at least 100 ms, reads its result, and disables the mux. It then enforces at least **10 ms from completed I2C processing before retriggering that same sensor**. Other eligible sensors and USB serial continue during that cooldown. A sensor reports without waiting for the other three to return values. START enables the next successful read, including one already in progress.
+The current I2C implementation triggers one sensor, waits at least 100 ms, reads its result, and disables the mux. It then enforces at least **10 ms from completed I2C processing before retriggering that same sensor**. Other eligible sensors and USB serial continue during that cooldown. A sensor reports without waiting for the other three to return values. In standalone mode, START enables output from the next successful read, including one already in progress. Reverse mode permits polling only during an active acquisition lease.
 
 The sensor module produces its own **40 kHz acoustic burst**. This is separate from the 100 kHz I2C clock and the measurement repetition rate. I2C reading still uses the 100 ms conversion wait; no early-echo interrupt is implemented.
 
@@ -234,5 +242,6 @@ Connections and settings were checked against the current sketch and the
 linked component references. The exact Nano and breakout header layouts,
 power budget, pull-up population, wiring, ultrasonic interference, and USB
 operation have not been inspected or measured on hardware. Before use, verify
-each sensor's physical position against its CSV column and confirm START/STOP
-behavior with the assembled system.
+each sensor's physical position against its reported column and confirm reverse
+qualification, LOW cancellation, lease expiry, and stale-data rejection with the
+assembled system. START/STOP checks apply only to the standalone build.

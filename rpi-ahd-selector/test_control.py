@@ -56,6 +56,7 @@ class SerialReplyTests(unittest.TestCase):
     def exchange(self, reply):
         """Run a real exchange against a mock port and verify it is closed."""
         port = Mock()
+        port.write.side_effect = len
         port.read_until.return_value = reply
         session = Mock()
         session.__enter__ = Mock(return_value=port)
@@ -65,7 +66,8 @@ class SerialReplyTests(unittest.TestCase):
         try:
             with patch.dict("sys.modules", {"serial": module}):
                 result = control.send_serial_command('{"status":true}\n', "test-port", 9600, 1.5)
-            constructor.assert_called_once_with("test-port", 9600, timeout=1.5, write_timeout=1.5)
+            constructor.assert_called_once_with("test-port", 9600, timeout=1.5, write_timeout=1.5,
+                                                exclusive=True)
             port.write.assert_called_once_with(b'{"status":true}\n')
             port.read_until.assert_called_once_with(b"\n", size=control.MAX_REPLY_BYTES)
             return result
@@ -77,6 +79,17 @@ class SerialReplyTests(unittest.TestCase):
             with self.subTest(ok=ok):
                 self.assertEqual(self.exchange((json.dumps({"ok": ok}) + "\n").encode()),
                                  {"ok": ok})
+
+    def test_short_command_write_does_not_accept_a_queued_ack(self):
+        port = Mock()
+        port.write.return_value = 1
+        port.read_until.return_value = b'{"ok":true}\n'
+        session = Mock(__enter__=Mock(return_value=port), __exit__=Mock(return_value=False))
+        with patch.dict("sys.modules", {"serial": types.SimpleNamespace(Serial=Mock(return_value=session))}):
+            with self.assertRaisesRegex(OSError, "incomplete"):
+                control.send_serial_command('{"status":true}\n', "test-port", 115200, 1)
+        port.read_until.assert_not_called()
+        session.__exit__.assert_called_once()
 
     def test_malformed_reply_is_a_readable_error(self):
         for reply in (b'[]\n', b'null\n', b'2\n', b'{}\n', b'{"ok":1}\n',

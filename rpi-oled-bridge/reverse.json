@@ -1,0 +1,16 @@
+{
+  "reverse_gpio_pin": null,
+  "reverse_active_high": true,
+  "reverse_high_qualify_ms": 100,
+  "reverse_low_qualify_ms": 0,
+  "reverse_sample_ms": 5,
+  "sensor_keepalive_ms": 250,
+  "sensor_lease_ms": 1500,
+  "ack_timeout_ms": 1000,
+  "distance_stale_ms": 1500,
+  "display_refresh_ms": 100,
+  "usb_write_timeout_ms": 100,
+  "boot_ms": 2000,
+  "reconnect_ms": 2000,
+  "idle_display_mode": "blank"
+}

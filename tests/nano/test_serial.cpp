@@ -6,6 +6,7 @@
 uint32_t fakeNow = 0;
 FakeSerial Serial;
 FakeWire Wire;
+#define OPTIC_COYOTE_STANDALONE 1
 #include "../../optic_coyote_ultrasonic/optic_coyote_ultrasonic.ino"
 
 void advance(uint32_t duration) {
@@ -287,6 +288,16 @@ int main() {
   recordSuccessfulReading(1, 888);
   for (int n = 0; n < 100; ++n) serviceSerialOutput();
   assert(lines().size() == 3 && fields(lines().back())[2] == "888");
+
+  // Reverse-mode expiry must not change standalone successful-history filtering.
+  reset();
+  recordSuccessfulReading(0, 250);
+  recordSuccessfulReading(0, 250);
+  recordSuccessfulReading(0, 250);
+  recordFailedReading(0);
+  fakeNow += ReverseConfig::kStaleMs;
+  recordSuccessfulReading(0, 5000);
+  assert(sensors[0].historyCount == 3 && sensors[0].filteredDistanceMm == 250);
 
   std::cout << "PASS: command framing, per-reading cached packets, independent zones, failure/recovery, 10 ms per-sensor cooldown, conversion wait, restart, clock rollover, stalled/partial TX, snapshot follow-up, cooldown-time sends and mid-frame restart\n";
 }
