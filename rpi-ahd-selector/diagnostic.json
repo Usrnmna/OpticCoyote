@@ -1,0 +1,13 @@
+{
+  "device": null,
+  "width": 1280,
+  "height": 720,
+  "fps": 60,
+  "warmup_buffers": 60,
+  "measurement_buffers": 600,
+  "rate_tolerance_percent": 5.0,
+  "max_buffer_gap_seconds": 0.25,
+  "cleanup_timeout_seconds": 3.0,
+  "test_timeout_seconds": 30.0,
+  "probe_timeout_seconds": 10.0
+}

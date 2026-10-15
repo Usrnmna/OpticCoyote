@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Forward the ultrasonic Nano's cached CSV through a Pi to the OLED Nano.
+"""Control reverse ranging/OLED ownership or forward standalone sensor CSV.
 
 Both Nanos attach to the Pi as USB serial devices. Only this process should own
 these ports. Values remain millimetres on USB; the display formats decimal feet.
+Use --reverse-config with the default reverse firmware on both Nanos.
 """
 
 from __future__ import annotations
@@ -12,8 +13,10 @@ from contextlib import ExitStack
 import logging
 import math
 import os
+import json
 import re
 import signal
+import stat
 import threading
 import time
 
@@ -133,10 +136,15 @@ def write_packet(port, packet: bytes) -> None:
 
 def same_device(sensor_port: str, display_port: str) -> bool:
     """Reject identical paths and aliases of the same character device."""
-    if os.path.realpath(sensor_port) == os.path.realpath(display_port):
+    if os.path.normcase(os.path.realpath(sensor_port)) == os.path.normcase(os.path.realpath(display_port)):
         return True
     try:
-        return os.path.samefile(sensor_port, display_port)
+        if os.path.samefile(sensor_port, display_port):
+            return True
+        sensor, display = os.stat(sensor_port), os.stat(display_port)
+        # Separate device nodes can have distinct inodes but the same driver ID.
+        return (stat.S_ISCHR(sensor.st_mode) and stat.S_ISCHR(display.st_mode)
+                and sensor.st_rdev == display.st_rdev)
     except OSError:
         return False  # Missing devices are retried by the normal open loop.
 
@@ -212,11 +220,15 @@ def parse_args(argv=None):
     parser.add_argument("--stale-seconds", type=finite_positive, default=STALE_SECONDS,
                         help="Blank all values after this many seconds without a valid sensor row")
     parser.add_argument("--list-ports", action="store_true", help="List serial ports and exit")
+    parser.add_argument("--reverse-config", help="Enable reverse GPIO control using this JSON configuration")
+    parser.add_argument("--check-config", action="store_true", help="Validate reverse JSON without GPIO or USB access")
     args = parser.parse_args(argv)
     args.sensor_order = tuple(args.sensor_order)
     if sorted(args.sensor_order) != [1, 2, 3, 4]:
         parser.error("--sensor-order must contain each of 1, 2, 3, 4 exactly once")
-    if not args.list_ports:
+    if args.check_config and not args.reverse_config:
+        parser.error("--check-config requires --reverse-config")
+    if not args.list_ports and not args.check_config:
         if not args.sensor_port or not args.display_port:
             parser.error("provide both --sensor-port and --display-port")
         if same_device(args.sensor_port, args.display_port):
@@ -228,6 +240,16 @@ def main(argv=None) -> int:
     """List devices or supervise the bridge until Ctrl+C/SIGTERM requests cleanup."""
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+    if args.reverse_config:
+        try:
+            import reverse_control
+            settings = reverse_control.load_config(args.reverse_config)
+            if args.check_config:
+                print(json.dumps(settings, indent=2))
+                return 0
+        except (OSError, ValueError) as error:
+            LOGGER.error("Reverse configuration: %s", error)
+            return 2
     try:
         import serial
         from serial.tools import list_ports
@@ -242,6 +264,12 @@ def main(argv=None) -> int:
     stop = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda _signum, _frame: stop.set())
+    if args.reverse_config:
+        try:
+            return reverse_control.run(serial, args, stop)
+        except (ImportError, OSError, ValueError) as error:
+            LOGGER.error("Reverse control stopped: %s", error)
+            return 1
     while not stop.is_set():
         try:
             run_session(serial, args, stop)

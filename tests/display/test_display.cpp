@@ -1,6 +1,7 @@
 // Exercise the actual display sketch with fake USB/I2C/time. No hardware claims.
 #include "Wire.h"
 #include <iostream>
+#define OPTIC_COYOTE_STANDALONE 1
 uint32_t fakeNow = 0;
 FakeSerial Serial;
 FakeWire Wire;

@@ -331,6 +331,7 @@ class SerialTests(unittest.TestCase):
             def write(self, reply):
                 writes.append(json.loads(reply))
                 stop.ticks = 2
+                return len(reply)
 
         class Disconnected(OSError):
             pass
@@ -356,7 +357,8 @@ class SerialTests(unittest.TestCase):
                   "retry_delay_seconds": 3}
         with patch.dict(sys.modules, {"serial": module}):
             selector.serial_control(state, config, stop)
-        constructor.assert_called_once_with("/dev/ttyUSB0", 9600, timeout=0.25, write_timeout=0.75)
+        constructor.assert_called_once_with("/dev/ttyUSB0", 9600, timeout=0.25, write_timeout=0.75,
+                                            exclusive=True)
         stop.wait.assert_called_once_with(3)
 
 

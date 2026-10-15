@@ -8,7 +8,9 @@ camera device paths, output format and timing; use --check-config before running
 Only the player thread owns the GStreamer process. GPIO, serial and stdin submit
 selections through State's lock; the last accepted input wins. A stable GPIO
 combination submits once, so an unchanged held button does not undo a later
-serial/stdin command. No input selected keeps the current camera.
+serial/stdin command. No input selected keeps the current camera in manual mode.
+Optional blinker trigger mode owns selection, holds through OFF gaps, and blanks
+the display in IDLE/BOTH. Manual selection commands are rejected in that mode.
 """
 import argparse
 import json
@@ -40,6 +42,18 @@ DEFAULTS = {
     "gpio_active_low": True,
     "gpio_sample_seconds": 0.01,
     "gpio_debounce_seconds": 0.03,
+    "trigger_enabled": False,
+    "trigger_left_pin": 17,
+    "trigger_right_pin": 27,
+    "trigger_left_camera": 1,
+    "trigger_right_camera": 2,
+    "trigger_active_low": False,
+    "trigger_sample_seconds": 0.01,
+    "trigger_debounce_seconds": 0.03,
+    "trigger_settle_seconds": 0.05,
+    "trigger_off_hold_seconds": 1.0,
+    "player_poll_seconds": 0.05,
+    "process_stop_timeout_seconds": 2.0,
     "serial_port": None,
     "serial_baud": 115200,
     "serial_read_timeout_seconds": 0.1,
@@ -56,6 +70,12 @@ NUMERIC_LIMITS = {
     "retry_delay_seconds": (0.05, 300, False),
     "gpio_sample_seconds": (0.001, 1, False),
     "gpio_debounce_seconds": (0, 5, False),
+    "trigger_sample_seconds": (0.001, 1, False),
+    "trigger_debounce_seconds": (0, 5, False),
+    "trigger_settle_seconds": (0, 5, False),
+    "trigger_off_hold_seconds": (0, 30, False),
+    "player_poll_seconds": (0.001, 1, False),
+    "process_stop_timeout_seconds": (0.05, 10, False),
     "serial_baud": (1, 4000000, True),
     "serial_read_timeout_seconds": (0.001, 10, False),
     "serial_write_timeout_seconds": (0.001, 10, False),
@@ -66,9 +86,7 @@ CAMERA_COUNT = 4
 MAX_COMMAND_BYTES = 1024
 SERIAL_READ_BYTES = 256
 STDIN_READ_BYTES = 4096
-PLAYER_POLL_SECONDS = 0.05
 STDIN_POLL_SECONDS = 0.1
-PROCESS_STOP_TIMEOUT_SECONDS = 2
 
 
 def camera_number(value):
@@ -114,6 +132,23 @@ def validate(config):
         raise ValueError("gpio_pins must be empty or four distinct BCM pin numbers 0..27")
     if type(config["gpio_active_low"]) is not bool:
         raise ValueError("gpio_active_low must be boolean")
+    for name in ("trigger_enabled", "trigger_active_low"):
+        if type(config[name]) is not bool:
+            raise ValueError(f"{name} must be boolean")
+    for name in ("trigger_left_pin", "trigger_right_pin"):
+        if type(config[name]) is not int or not 0 <= config[name] <= 27:
+            raise ValueError(f"{name} must be an integer BCM pin number 0..27")
+    if config["trigger_left_pin"] == config["trigger_right_pin"]:
+        raise ValueError("trigger_left_pin and trigger_right_pin must be distinct")
+    for name in ("trigger_left_camera", "trigger_right_camera"):
+        try:
+            camera_number(config[name])
+        except ValueError as exc:
+            raise ValueError(f"{name}: {exc}") from exc
+    if config["trigger_left_camera"] == config["trigger_right_camera"]:
+        raise ValueError("trigger_left_camera and trigger_right_camera must be distinct")
+    if config["trigger_enabled"] and pins:
+        raise ValueError("gpio_pins must be empty when trigger_enabled is true")
     port = config.get("serial_port")
     if port is not None and (not isinstance(port, str) or not port.strip() or "\0" in port):
         raise ValueError("serial_port must be null or a device path")
@@ -140,15 +175,18 @@ def validate(config):
 
 
 def command(config, camera, demo=False, headless=False):
-    """Build shell-free GStreamer arguments for one camera, without starting it.
+    """Build one camera pipeline, or a black display when camera is None.
 
     A two-frame leaky queue limits backlog; scaling preserves aspect ratio with
     borders. videorate matches the requested output rate (it may repeat frames).
     The watchdog exits a stalled pipeline so player can retry it.
     """
-    camera_number(camera)
-    source = (f"videotestsrc is-live=true pattern={camera - 1}" if demo
-              else config["sources"][camera - 1])
+    if camera is None:
+        source = "videotestsrc is-live=true pattern=black"
+    else:
+        camera_number(camera)
+        source = (f"videotestsrc is-live=true pattern={camera - 1}" if demo
+                  else config["sources"][camera - 1])
     sink = "fakesink sync=true" if headless else config.get("sink", DEFAULTS["sink"])
     width = config.get("output_width", DEFAULTS["output_width"])
     height = config.get("output_height", DEFAULTS["output_height"])
@@ -162,87 +200,209 @@ def command(config, camera, demo=False, headless=False):
     return ["gst-launch-1.0", "-q"] + shlex.split(pipeline)
 
 
+class BlinkerTrigger:
+    """Resolve a normalized input pair using monotonic timestamps in seconds.
+
+    Debounce applies to the pair before classification. Single-side states also
+    require the settling interval; BOTH does not. Stable all-LOW intervals hold
+    the last state until the OFF timeout. Inputs are never stretched separately,
+    so successive opposite turns cannot create a synthetic BOTH state.
+    """
+    def __init__(self, config):
+        """Load tuning once; begin idle with no accepted input or OFF timer."""
+        self.debounce = config["trigger_debounce_seconds"]
+        self.settle = config["trigger_settle_seconds"]
+        self.off_hold = config["trigger_off_hold_seconds"]
+        self.candidate = None
+        self.since = 0.0
+        self.off_since = None
+        self.state = "IDLE"
+
+    def update(self, left, right, now):
+        """Return the current state; brief glitches do not refresh the OFF hold."""
+        if left and right:
+            candidate = "BOTH"
+        elif left:
+            candidate = "LEFT"
+        elif right:
+            candidate = "RIGHT"
+        else:
+            candidate = "IDLE"
+        if candidate != self.candidate:
+            self.candidate, self.since = candidate, now
+        stable_for = now - self.since
+        if stable_for >= self.debounce:
+            if candidate == "IDLE":
+                if self.off_since is None:
+                    self.off_since = self.since
+            elif candidate == "BOTH" or stable_for >= self.debounce + self.settle:
+                self.off_since = None
+                self.state = candidate
+        # Once armed by a debounced OFF pair, expiry is independent of the next
+        # candidate's debounce/settling. Only a qualified active pair cancels it.
+        if self.off_since is not None and now - self.off_since >= self.off_hold:
+            self.state = "IDLE"
+        return self.state
+
+
 class State:
     """Protect requested camera and worker status shared across all input threads.
 
     pipeline_camera means a process was started, not proof of a healthy frame.
-    Use these methods rather than writing attributes from control workers.
+    Input workers use these methods. Playback reserves and validates launch under
+    the lock but creates processes outside it, keeping trigger publication live.
     """
-    def __init__(self, initial):
-        """Start with a requested camera and no active video process."""
+    def __init__(self, initial, trigger_config=None):
+        """Start idle in trigger mode, otherwise request the initial camera."""
         self.lock = threading.Lock()
-        self.selected = camera_number(initial)
+        self.trigger_enabled = bool(trigger_config and trigger_config["trigger_enabled"])
+        self.trigger_cameras = ({"LEFT": trigger_config["trigger_left_camera"],
+                                 "RIGHT": trigger_config["trigger_right_camera"]}
+                                if self.trigger_enabled else {})
+        self.trigger_state = "IDLE" if self.trigger_enabled else None
+        self.trigger_error = None
+        self.selected = None if self.trigger_enabled else camera_number(initial)
+        # Preserve a stop request even if another trigger arrives before playback polls.
+        self.stop_generation = 0
         self.running = None
         self.error = None
+        self.display_mode = "stopped"
 
     def select(self, camera):
         """Atomically accept an explicit camera request."""
         with self.lock:
+            if self.trigger_enabled:
+                raise ValueError("camera selection is controlled by blinker trigger mode")
             self.selected = camera_number(camera)
 
     def inputs(self, values):
         """Atomically resolve a four-input request against the current selection."""
         with self.lock:
+            if self.trigger_enabled:
+                raise ValueError("camera selection is controlled by blinker trigger mode")
             self.selected = resolve_inputs(values, self.selected)
+
+    def trigger(self, trigger_state, error=None):
+        """Apply a trigger transition; IDLE/BOTH/FAULT prohibit camera capture.
+
+        This method is the entry point for future BOTH-state behavior. Repeated
+        samples do not repeat entry actions. FAULT remains latched until restart.
+        """
+        if trigger_state not in ("IDLE", "LEFT", "RIGHT", "BOTH", "FAULT"):
+            raise ValueError("invalid trigger state")
+        with self.lock:
+            if not self.trigger_enabled or self.trigger_state == "FAULT":
+                return
+            changed = trigger_state != self.trigger_state
+            if changed:
+                if trigger_state in ("IDLE", "BOTH", "FAULT"):
+                    self.stop_generation += 1
+            self.trigger_state = trigger_state
+            self.trigger_error = error
+            self.selected = self.trigger_cameras.get(trigger_state)
+        # Diagnostics must not delay publication or hold the playback lock.
+        if changed:
+            LOG.info("Blinker trigger state: %s", trigger_state)
 
     def snapshot(self):
         """Return a consistent JSON-ready copy of selection and playback status."""
         with self.lock:
             return {"selected_camera": self.selected, "pipeline_camera": self.running,
-                    "last_error": self.error}
+                    "last_error": self.error, "display_mode": self.display_mode,
+                    "trigger_state": self.trigger_state, "trigger_error": self.trigger_error,
+                    "stop_generation": self.stop_generation}
 
-    def playback(self, camera, error=None):
+    def playback(self, camera, error=None, blank=False):
         """Record process status; only the player worker calls this in normal use."""
         with self.lock:
             self.running, self.error = camera, error
+            self.display_mode = "blank" if blank else "camera" if camera is not None else "stopped"
 
 
-def stop_process(process):
+def stop_process(process, timeout=DEFAULTS["process_stop_timeout_seconds"]):
     """Terminate the active capture, then force-stop after a bounded grace period."""
     if process is not None and process.poll() is None:
         process.terminate()
         try:
-            process.wait(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
+            process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.wait()
+            process.wait(timeout=timeout)
 
 
 def player(state, config, stop, demo=False, headless=False):
-    """Own one video process; switch immediately and retry failures until stopped.
+    """Own one camera or black-output process; switch/retry until stopped.
 
     A switch clears the retry delay and stops the old capture before opening the
-    new one. The finally block releases the active capture on shutdown.
+    new one. Trigger inhibition selects black output with no capture device.
+    Process creation cannot be cancelled in flight; stale launches are stopped
+    as soon as creation returns, before status publication or a polling wait.
+    The finally block releases the active process on shutdown.
     """
     process = None
+    shutdown_error = None
     active = None
+    generation = 0
     retry_at = 0
     retry_delay = config.get("retry_delay_seconds", DEFAULTS["retry_delay_seconds"])
+    poll_seconds = config.get("player_poll_seconds", DEFAULTS["player_poll_seconds"])
+    stop_timeout = config.get("process_stop_timeout_seconds", DEFAULTS["process_stop_timeout_seconds"])
     try:
         while not stop.is_set():
-            requested = state.snapshot()["selected_camera"]
-            if requested != active:
-                stop_process(process)
-                process, active, retry_at = None, requested, 0
+            snapshot = state.snapshot()
+            requested = snapshot["selected_camera"]
+            if requested != active or snapshot["stop_generation"] != generation:
+                stop_process(process, stop_timeout)
+                process, retry_at = None, 0
+                # Stop may block while GPIO changes. Resolve the target again before launch.
+                snapshot = state.snapshot()
+                active, generation = snapshot["selected_camera"], snapshot["stop_generation"]
                 state.playback(None)
             if process is not None and process.poll() is not None:
-                error = f"Camera {active} pipeline exited ({process.returncode}); retrying"
+                error = f"Video target {active} pipeline exited ({process.returncode}); retrying"
                 LOG.error(error)
                 state.playback(None, error)
                 process, retry_at = None, time.monotonic() + retry_delay
             if process is None and time.monotonic() >= retry_at:
                 try:
-                    process = subprocess.Popen(command(config, active, demo, headless))
-                    state.playback(active)
-                    LOG.info("Starting camera %s", active)
+                    arguments = command(config, active, demo, headless)
+                    # Reserve this target under the state lock. Process creation must
+                    # not block GPIO updates or status queries while the OS launches it.
+                    with state.lock:
+                        if (stop.is_set() or state.selected != active
+                                or state.stop_generation != generation):
+                            continue
+                    process = subprocess.Popen(arguments)
+                    with state.lock:
+                        stale = (stop.is_set() or state.selected != active
+                                 or state.stop_generation != generation)
+                        if not stale:
+                            state.running, state.error = active, None
+                            state.display_mode = "blank" if active is None else "camera"
+                    if stale:
+                        stop_process(process, stop_timeout)
+                        process = None
+                        state.playback(None)
+                        continue
+                    LOG.info("Starting video target %s", active if active is not None else "black")
                 except OSError as exc:
                     state.playback(None, str(exc))
                     LOG.error("Cannot launch video: %s", exc)
                     retry_at = time.monotonic() + retry_delay
-            stop.wait(PLAYER_POLL_SECONDS)
+            stop.wait(poll_seconds)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        # A process that cannot be stopped must not be replaced by another capture.
+        shutdown_error = f"Video teardown failed; device release unverified: {exc}"
+        LOG.error(shutdown_error)
+        stop.set()
     finally:
-        stop_process(process)
-        state.playback(None)
+        try:
+            stop_process(process, stop_timeout)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            shutdown_error = f"Video cleanup failed; device release unverified: {exc}"
+            LOG.error(shutdown_error)
+            stop.set()
+        state.playback(None, shutdown_error)
 
 
 def apply_message(state, line):
@@ -306,12 +466,14 @@ def serial_control(state, config, stop):
     while not stop.is_set():
         try:
             with serial.Serial(config["serial_port"], baud,
-                               timeout=read_timeout, write_timeout=write_timeout) as port:
+                               timeout=read_timeout, write_timeout=write_timeout,
+                               exclusive=True) as port:
                 LOG.info("Serial control ready on %s", config["serial_port"])
                 lines = Lines()
                 while not stop.is_set():
                     for reply in responses(state, lines, port.read(SERIAL_READ_BYTES)):
-                        port.write(reply)
+                        if port.write(reply) != len(reply):
+                            raise OSError("Serial control reply was incomplete")
         except (OSError, serial.SerialException) as exc:
             LOG.error("Serial control unavailable: %s; retrying", exc)
             stop.wait(retry_delay)
@@ -338,6 +500,23 @@ def poll_gpio(state, buttons, stop, config=None):
             previous = values
 
 
+def poll_triggers(state, buttons, stop, config):
+    """Sample left/right normalized inputs; latch a blank FAULT on read failure.
+
+    The playback worker remains alive to stop capture and display black after a
+    GPIO error. Recovery requires a restart so stale inputs cannot select video.
+    """
+    trigger = BlinkerTrigger(config)
+    try:
+        while not stop.is_set():
+            left, right = (bool(button.is_pressed) for button in buttons)
+            state.trigger(trigger.update(left, right, time.monotonic()))
+            stop.wait(config["trigger_sample_seconds"])
+    except Exception as exc:
+        state.trigger("FAULT", str(exc))
+        LOG.exception("Blinker GPIO monitoring failed; camera capture inhibited")
+
+
 def main(argv=None):
     """Validate settings, start local workers, handle stdin and release resources.
 
@@ -359,6 +538,7 @@ def main(argv=None):
         parser.error(str(exc))
     if args.check_config:
         print(json.dumps({"config": config,
+                          "inactive_pipeline": command(config, None, args.demo, args.headless),
                           "pipelines": [command(config, camera, args.demo, args.headless)
                                         for camera in range(1, CAMERA_COUNT + 1)]}, indent=2))
         return
@@ -374,22 +554,26 @@ def main(argv=None):
             command(config, camera, args.demo, args.headless)
     except ValueError as exc:
         parser.error(f"Invalid pipeline: {exc}")
-    state, stop, buttons, workers = State(config["initial_camera"]), threading.Event(), [], []
+    state, stop, buttons, workers = State(config["initial_camera"], config), threading.Event(), [], []
     factory = None
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stop.set())
     try:
-        for pin in config.get("gpio_pins", []):
+        pins = ([config["trigger_left_pin"], config["trigger_right_pin"]]
+                if config["trigger_enabled"] else config["gpio_pins"])
+        active_low = config["trigger_active_low"] if config["trigger_enabled"] else config["gpio_active_low"]
+        for pin in pins:
             from gpiozero import Button
             from gpiozero.pins.lgpio import LGPIOFactory
             if not buttons:
                 factory = LGPIOFactory()
-            buttons.append(Button(pin, pull_up=config.get("gpio_active_low", True),
+            buttons.append(Button(pin, pull_up=active_low,
                                   pin_factory=factory))
         workers.append(threading.Thread(target=player,
                        args=(state, config, stop, args.demo, args.headless)))
         if buttons:
-            workers.append(threading.Thread(target=poll_gpio, args=(state, buttons, stop, config)))
+            gpio_worker = poll_triggers if config["trigger_enabled"] else poll_gpio
+            workers.append(threading.Thread(target=gpio_worker, args=(state, buttons, stop, config)))
         if config.get("serial_port"):
             workers.append(threading.Thread(target=serial_control, args=(state, config, stop)))
         for worker in workers:

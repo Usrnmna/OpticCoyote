@@ -6,6 +6,15 @@ chip package pin numbers are different numbering systems.** Each diagram states
 which one it uses. Wire to board/module headers; chip references below help with
 identification and tracing, not instructions to solder to an assembled IC.
 
+The [optional Pi buzzer](pi-buzzer.md) has no assigned BCM pin or physical
+header position for its signal. The specified DIYables
+`DIY-BUZZER-MODULE-PASSIVE-5` module uses the printed labels `VCC` (3.3 V DC),
+`GND` (common ground), and `I/O` (configured BCM GPIO). The manufacturer photograph
+marks LOW-level triggering; passive PWM with active-low polarity is configured
+by default. Playback remains disabled until pin assignment and wiring setup.
+The buzzer reference distinguishes published specifications from untested
+electrical behavior and documents OFF bias during GPIO release.
+
 ## ELEGOO Nano N1 and N2
 
 The project uses ATmega328P-based Nano boards with a CH340 USB-to-serial bridge.
@@ -46,7 +55,7 @@ for the CH340 board's schematic.
 
 | Nano header | Sensor Nano N1 | Display Nano N2 |
 | --- | --- | --- |
-| USB connector | Pi sensor USB port; START/STOP and CSV | Pi display USB port; four-distance packets |
+| USB connector | Pi sensor USB port; leased acquisition and tagged readings | Pi display USB port; leased distance ownership |
 | A4 / SDA | M1 upstream SDA | O1 SDA, with level shifting if needed |
 | A5 / SCL | M1 upstream SCL | O1 SCL, with level shifting if needed |
 | GND | M1 and sensor ground | O1 ground |
@@ -221,9 +230,14 @@ inferred for an unidentified display assembly.
 
 ## Raspberry Pi P1
 
-For the primary distance/OLED path, use USB-A host ports for N1 and N2; leave the
-40-pin GPIO header unconnected. The camera path uses USB capture and HDMI output.
-The selected Pi model determines the physical port locations.
+P1 is the **Raspberry Pi 5, 4 GB RAM model**. See the
+[official board specifications](https://www.raspberrypi.com/products/raspberry-pi-5/).
+
+For the distance/OLED data path, use USB-A host ports for N1 and N2. Reverse
+control additionally uses one manually assigned, protected GPIO input; see the
+[reverse wiring](project-wiring.md#reverse-trigger-input). Standalone forwarding
+requires no GPIO connection. The camera path uses USB capture and HDMI output.
+Match physical port locations to the Pi 5 board markings.
 
 The optional GPIO draft uses the following portion of the standard 40-pin
 header. Numbers in parentheses are **physical pin positions**; GPIO names are
@@ -255,8 +269,8 @@ connect the project's OLED or sensor mux; both I2C buses belong to the Nanos.
 | Part/interface | Pin naming to use | Detail still dependent on selected hardware |
 | --- | --- | --- |
 | NPN transistor in GPIO draft | B = base, C = collector, E = emitter | Numbered lead order; check actual manufacturer/package |
-| Camera output | Video signal and return/shield | Camera harness connector, power pins and voltage |
-| AHD capture input | AHD video input | Connector and supported video formats |
+| GreenYi AHD camera output, [ASIN B0C3R5Y7K1](https://www.amazon.com/GreenYi-Reverse-Trailer-Adjustable-Fisheye/dp/B0C3R5Y7K1) | Video signal and return/shield | Actual revision, harness connector, power pins and voltage; see [camera identity](../README.md#greenyi-camera-identity) |
+| GRACETOP AHD capture input, GTDE-ABV2USBC / GTUS-AHD2USB | Advertised four-pin 5 V output, GND, video input, audio input | Actual lead order/orientation, supply capacity, and supported modes require verification; see [adapter reference](../README.md#gracetop-adapter-identity-and-advertised-specifications) |
 | USB | Complete data cable and board connector | Connector variant; do not hand-wire by wire color |
 | HDMI | Complete compatible cable | Pi-side connector size and chosen output |
 

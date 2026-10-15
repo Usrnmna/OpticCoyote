@@ -1,0 +1,10 @@
+{
+  "hardware_timeout_seconds": 60,
+  "cleanup_timeout_seconds": 5,
+  "low_release_limit_ms": 300,
+  "quiet_settle_ms": 500,
+  "quiet_observation_ms": 1000,
+  "minimum_sensor_packets": 3,
+  "minimum_display_acks": 2,
+  "max_observation_gap_ms": 50
+}

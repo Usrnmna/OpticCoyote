@@ -4,6 +4,19 @@ For the complete assembly, use the [project wiring scheme](project-wiring.md)
 and [controller/module pinouts](component-pinouts.md). This guide covers the
 display path's installation and operation.
 
+The installed USB host is the **Raspberry Pi 5 with 4 GB RAM**.
+
+Both supplied Nano builds default to **reverse-triggered operation**. Follow the
+[reverse-trigger guide](reverse-trigger.md) to upload both sketches, configure
+the Pi GPIO, and run the bridge with `--reverse-config`. Sensors remain idle and
+the powered OLED remains blank outside a qualified reverse session. The idle
+renderer is available for future non-reverse content.
+
+The untagged CSV/D commands and continuous forwarding examples below describe
+**standalone mode only**. To use those examples, set `OPTIC_COYOTE_STANDALONE` to
+`1` in both Nano `reverse_config.h` files and rebuild/upload both sketches.
+Do not mix standalone firmware or bridge operation with reverse mode.
+
 The four rear-bumper sensors appear as **1, 2, 3, 4 from left to right** on a
 0.91-inch SSD1306 **128x32 I2C** OLED. Each distance is rounded to one decimal
 place in feet. For example, 305, 610, 914, and 1219 mm display as:
@@ -31,7 +44,7 @@ Sensor ELEGOO Nano (ATmega328P + CH340, existing firmware)
                   |
          USB-C to USB-A data cable
                   |
-Raspberry Pi USB host running rpi-oled-bridge/bridge.py
+Raspberry Pi 5 (4 GB) USB host running rpi-oled-bridge/bridge.py
                   |
          another USB-A to USB-C data cable
                   |
@@ -44,7 +57,8 @@ Display ELEGOO Nano (same ATmega328P board type, new firmware)
 
 Both microcontrollers plug into separate Pi USB host ports. The Pi reads one USB
 serial device and writes to the other. No direct Nano-to-Nano USB connection,
-Pi GPIO connection, network service, or Pi I2C connection is used by this path.
+network service or Pi I2C connection is used by the USB data path. Reverse mode
+also uses one protected Pi GPIO input; standalone forwarding uses no GPIO.
 Use data-capable cables with connectors matching the actual boards.
 
 | Component | Program | Where to adjust it |
@@ -53,8 +67,11 @@ Use data-capable cables with connectors matching the actual boards.
 | Pi | [bridge.py](../rpi-oled-bridge/bridge.py) | CLI USB paths, `--sensor-order`, `--stale-seconds`, `--boot-seconds`; timing constants at the top. |
 | Display Nano | [New display sketch](../optic_coyote_display/optic_coyote_display.ino) | `Config` OLED address, landscape rotation, and timeout. |
 | Display protocol | [display_protocol.h](../optic_coyote_display/display_protocol.h) | Bounded input parsing and integer conversion to tenths of a foot. |
+| Reverse control | [reverse_control.py](../rpi-oled-bridge/reverse_control.py), [reverse.json](../rpi-oled-bridge/reverse.json) | GPIO qualification, session freshness, ownership, and fault recovery. |
+| Reverse diagnostic | [diagnose_reverse.py](../rpi-oled-bridge/diagnose_reverse.py), [test procedure](reverse-diagnostics.md) | Software checks and optional GPIO/USB observations; controller ACKs do not verify OLED pixels. |
+| Reverse firmware | [sensor settings](../optic_coyote_ultrasonic/reverse_config.h), [display settings](../optic_coyote_display/reverse_config.h), [display protocol](../optic_coyote_display/reverse_protocol.h) | Default idle boot, acquisition/display leases, and explicit release. |
 
-This program consumes the existing **ultrasonic** Nano's CSV. A different optical
+Standalone forwarding consumes the **ultrasonic** Nano's CSV. A different optical
 sensor controller would need to produce the same CSV format or have an explicit
 parser added; this implementation does not guess another device's protocol.
 The camera selector and draft GPIO programs retain their separate interfaces.
@@ -78,7 +95,7 @@ Check that order from the intended viewing orientation during installation.
 
 If existing cables run in the reverse order, pass `--sensor-order 4 3 2 1` on
 the Pi. Any permutation containing 1, 2, 3, and 4 exactly once is supported.
-Those numbers select CSV distance positions, not raw mux channel numbers. If
+Those numbers select reported sensor positions in either mode, not raw mux channel numbers. If
 the sensor sketch's `kMuxChannels` order changes, check the mapping again.
 
 ## Connect the OLED to the display Nano
@@ -135,7 +152,7 @@ arduino-cli upload --fqbn arduino:avr:nano:cpu=atmega328 --port DISPLAY_PORT opt
 Use `arduino:avr:nano:cpu=atmega328old` for the old bootloader when needed.
 Do not upload while the Pi bridge or Serial Monitor owns that port.
 
-## Run the Pi bridge
+## Run the Pi bridge in standalone mode
 
 Use Python 3.10 or newer and pySerial. On Raspberry Pi OS:
 
@@ -187,7 +204,13 @@ python3 rpi-oled-bridge/bridge.py \
   --sensor-order 4 3 2 1 --boot-seconds 2 --stale-seconds 2
 ```
 
-## Serial contract and failure behavior
+## Standalone serial contract and failure behavior
+
+This section applies only to the explicitly enabled standalone firmware and
+bridge path. In reverse mode, OLED USB/ACK failures retry the display link while
+qualified sensor acquisition continues; LOW still releases both functions.
+The [reverse guide](reverse-trigger.md) defines its independent link recovery,
+fresh display sessions, and per-sensor age checks.
 
 Both links use **115200 baud, 8N1**, without flow control.
 
@@ -216,12 +239,14 @@ Both links use **115200 baud, 8N1**, without flow control.
   are retried while serial continues to be serviced. A disconnected or frozen
   physical OLED cannot be guaranteed to show a fault message.
 
-**Per-sensor freshness limitation:** the existing sensor firmware retains each
+**Standalone per-sensor freshness limitation:** the standalone sensor firmware retains each
 sensor's latest successful reading indefinitely. CSV does not include individual
 ages or identify the sensor updated by each row. If one sensor fails while others
 continue reporting, that sensor's previous value can remain displayed. The Pi
 timeout detects a stopped entire stream only. This implementation preserves that
 sensor protocol; it does not imply four newly measured values in every packet.
+Reverse mode instead sends individual ages, marks failed/stale samples
+unavailable, and rejects delayed or previous-session data.
 
 ## Verify before installation
 
@@ -246,7 +271,7 @@ frames, atomic updates, stale-stream behavior, reset/header handling, short
 writes, port cleanup, millis rollover, and simulated OLED recovery. Host drawing
 tests record text coordinates; they do not render through the physical display.
 
-For an OLED-only bench check, close the bridge, open the display Nano in Serial
+For a standalone OLED-only bench check, close the bridge, open the display Nano in Serial
 Monitor at 115200, wait for reset, and send `D,305,610,914,1219` with a newline.
 Expect `1.0 2.0 3.0 4.0` under labels 1-4. Values expire after two seconds unless
 you send another packet. Send `D,-1,0,5000,30000` to check `--.- 0.0 16.4 98.4`.
