@@ -2,6 +2,8 @@
 
 [Documentation index](index.md) | [Project overview](../README.md)
 
+Current release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 The Raspberry Pi 5, 4 GB RAM model can drive one optional buzzer through
 `rpi-buzzer/buzzer.py`. Named finite patterns are available for later programs
 to call. No reverse, blinker, distance, or BOTH-state binding is defined. The

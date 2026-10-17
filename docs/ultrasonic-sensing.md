@@ -2,6 +2,8 @@
 
 [Documentation index](index.md) · [Project overview](../README.md)
 
+Current release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 See the [Nano pinout and interface reference](nano-ultrasonic-pinout.md)
 for a text wiring graph, pin connections, power notes, and USB commands.
 

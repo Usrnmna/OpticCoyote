@@ -2,15 +2,16 @@
 
 [Documentation index](index.md) | [Project overview](../README.md)
 
+Current project release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 Release date: **2026-10-16**  
 Release identifier: **`v0.5.1-beta`**  
 Debian package version: **`0.5.1~beta`**
 
-These notes describe the original beta artifacts. Later source changes and
-reorganized guides are recorded in [current source status](current-state.md);
-the existing artifacts have not been rebuilt to contain those changes.
-The [unreleased source notes](release-notes-unreleased.md) summarize subsequent
-camera, sensor, OLED, documentation, and Git-file changes separately from this release.
+These notes describe only the original v0.5.1-beta artifacts and their recorded
+hashes. The current [v0.5.2-beta release](release-notes-v0.5.2-beta.md) includes the
+subsequent camera, sensor, OLED, documentation, and Git-file changes. Use the
+current release artifacts for those updates.
 
 ## Overview
 
@@ -143,5 +144,5 @@ SHA-256 hashes for the verified release builds:
 284a6a5348ad6001874ec8a8b81629a18ce77b5c2541cdf192cde2288fba49a6  project-optic-coyote_0.5.1~beta_trixie_arm64_offline.tar.gz
 ```
 
-These release notes accompany the existing builds as a separate document. The
-package and offline archive were not regenerated for this documentation addition.
+These hashes identify the original v0.5.1-beta builds only. They must not be
+used to verify the differently named v0.5.2-beta artifacts.

@@ -2,6 +2,8 @@
 
 [Documentation index](index.md) · [Project overview](../README.md)
 
+Current release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 This guide covers capture-mode verification and diagnostic reports. Complete
 [camera setup](camera-setup.md) first. Commands run from `rpi-ahd-selector/`
 unless another working directory is specified. For a complete checkout, enter

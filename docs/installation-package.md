@@ -2,20 +2,16 @@
 
 [Documentation index](index.md) | [Project overview](../README.md)
 
-The release baseline is **v0.5.1-beta**, represented as **`0.5.1~beta`**
-in Debian package metadata and filenames. The tilde identifies a prerelease
-that sorts before the final `0.5.1` Debian version.
+The current release is **v0.5.2-beta**, represented as **`0.5.2~beta`** in Debian
+metadata and filenames. Its Debian package and offline installer include the
+updated Pi applications and maintained documentation. The accompanying source
+archive includes both Nano firmware projects and their compiled default builds;
+Nano upload remains a separate operation.
 
-The commands below use the beta package and offline bundle filenames. Earlier
-release artifacts retain their original version identities and checksums.
-
-This guide describes the current source implementation. Existing packages and
-offline bundles do not contain all later two-camera, OLED, and documentation
-changes, despite sharing the version baseline. Consult the
-[current source status](current-state.md#distribution-boundary) before installation.
-
-See the [Version 0.5.1 - Beta release notes](release-notes-v0.5.1-beta.md)
-for changes, verification results, and known limitations.
+The examples below install v0.5.2-beta. Original v0.5.1-beta artifacts retain
+their historical identities and hashes. See the
+[current release notes](release-notes-v0.5.2-beta.md) for contents, checksums,
+verification scope, and limitations.
 
 ## Target and contents
 
@@ -37,7 +33,7 @@ Copy the built `.deb` to the Pi and install it with APT:
 
 ```sh
 sudo apt update
-sudo apt install ./project-optic-coyote_0.5.1~beta_all.deb
+sudo apt install ./project-optic-coyote_0.5.2~beta_all.deb
 sudo optic-coyote-setup
 ```
 
@@ -56,9 +52,9 @@ boot without starting them immediately. Source defaults remain installed under
 Transfer the archive and its `.sha256` file to the Pi. From that directory:
 
 ```sh
-sha256sum -c project-optic-coyote_0.5.1~beta_trixie_arm64_offline.tar.gz.sha256
-tar -xzf project-optic-coyote_0.5.1~beta_trixie_arm64_offline.tar.gz
-cd project-optic-coyote_0.5.1~beta_trixie_arm64_offline
+sha256sum -c project-optic-coyote_0.5.2~beta_trixie_arm64_offline.tar.gz.sha256
+tar -xzf project-optic-coyote_0.5.2~beta_trixie_arm64_offline.tar.gz
+cd project-optic-coyote_0.5.2~beta_trixie_arm64_offline
 python3 install.py --verify-only
 sudo python3 install.py
 sudo optic-coyote-setup
@@ -247,7 +243,7 @@ whitespace, quotes, or commas:
 
 ```sh
 python3 packaging/build_package.py
-python3 packaging/build_offline.py --package dist/project-optic-coyote_0.5.1~beta_all.deb
+python3 packaging/build_offline.py --package dist/project-optic-coyote_0.5.2~beta_all.deb
 python3 packaging/verify_host.py
 ```
 
@@ -276,24 +272,17 @@ same versions. Package installation can be tested in an isolated Linux root;
 simulation alone does not prove maintainer-script execution or boot behavior.
 No physical Pi, camera, GPIO, USB, or display result follows from host checks.
 
-### Subsequent source review
+### Changes included in v0.5.2-beta
 
-The [current source status](current-state.md) separates current behavior and
-documentation from previously generated distribution artifacts.
-The [unreleased source notes](release-notes-unreleased.md) collect subsequent
-changes and migration considerations, including documentation corrections and
-Git-file maintenance. These updates do not assign a new package version.
+The [current release notes](release-notes-v0.5.2-beta.md) describe the two-camera
+selection and sensor-identity corrections, OLED layout and freshness fixes,
+documentation reorganization and review, and Git-file maintenance. Updated Pi
+code and documentation are included in the rebuilt package and offline installer.
+Firmware sources, tests, and compiled Nano builds accompany the source archive.
 
-The [two-camera source review](combined-triggers.md#two-camera-source-review-2026-10-16)
-corrected sensor identity guidance and added focused regression coverage.
-The subsequent [OLED layout revision](oled-display.md#fixed-pixel-layout) adds
-9×16 distance glyphs, the `≥10` cap, and `-.-` unavailable markers.
-Its [source review](oled-display.md#oled-source-review) also corrects data expiry
-during rendering and expands formatting, rotation, and deadline tests.
-Packages, offline bundles, and installers have not been rebuilt for these revisions
-or the subsequent documentation reorganization, review corrections, and release notes;
-earlier archives do not contain these latest changes. The results below describe
-the initial two-camera revision, not newly generated distribution artifacts.
+The historical results below describe earlier revisions. Current release
+software results and artifact checks are documented separately in the
+[v0.5.2-beta verification record](release-notes-v0.5.2-beta.md#recorded-verification-and-limitations).
 
 ### Two-camera revision verification, 2026-10-16
 

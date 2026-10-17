@@ -2,6 +2,8 @@
 
 [Documentation index](index.md) | [Project overview](../README.md)
 
+Current release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 ## Recommended operating system
 
 **Raspberry Pi OS Lite (64-bit), Debian 13 Trixie**, is the recommended

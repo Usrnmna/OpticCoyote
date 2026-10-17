@@ -2,6 +2,8 @@
 
 [Documentation index](index.md) | [Project overview](../README.md)
 
+Current release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 For the complete assembly, see the [project wiring scheme](project-wiring.md)
 and [controller/module pinouts](component-pinouts.md). This reference
 covers the sensor Nano, mux, and sensor interface in detail.

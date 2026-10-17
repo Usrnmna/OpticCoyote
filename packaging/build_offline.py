@@ -180,6 +180,9 @@ def main():
     write_text(bundle / 'install.py', (ROOT / 'packaging/install_offline.py').read_text(), 0o755)
     shutil.copytree(ROOT / 'docs', bundle / 'docs', ignore=shutil.ignore_patterns('_build', '.cache'))
     shutil.copyfile(ROOT / 'README.md', bundle / 'README.md')
+    # Preserve the historical-guide link used by the documentation index.
+    (bundle / 'draft-gpio-link').mkdir()
+    shutil.copyfile(ROOT / 'draft-gpio-link/README.md', bundle / 'draft-gpio-link/README.md')
     write_text(bundle / 'INSTALL.md', '# Offline installation\n\n'
                'See [installation and setup](docs/installation-package.md) for the complete procedure.\n\n'
                'Run `python3 install.py --verify-only`, then `sudo python3 install.py`, '

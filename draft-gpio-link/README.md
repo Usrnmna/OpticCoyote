@@ -1,5 +1,7 @@
 # Retired four-camera GPIO prototype
 
+Current project release: [v0.5.2-beta](../docs/release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 Historical reference only. This prototype is outside the supported two-camera,
 four-rear-sensor installation. Its sensor labels and four-camera protocol are
 retained as historical behavior; commands for cameras 3 and 4 are rejected by

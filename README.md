@@ -68,10 +68,11 @@ firmware behavior, code maps, and test commands are in the
 
 ## Source and release status
 
-The release baseline is **v0.5.1-beta**. Current source includes later two-camera,
-sensor-identity, and OLED changes; existing packages and installers have not
-been rebuilt to include all of them. Consult the
-[current source status](docs/current-state.md) before using an older artifact.
+The current release is **v0.5.2-beta**. Its Debian package and offline installer
+include the updated two-camera Pi software and documentation. The complete source
+archive includes the rear-sensor and OLED Nano firmware, which is deployed
+separately. See the [release notes](docs/release-notes-v0.5.2-beta.md) for artifacts
+and verification, and [current source status](docs/current-state.md) for details.
 
 Software tests and firmware compilation do not establish physical camera,
 sensor, electrical, or display performance. Hardware acceptance remains pending.

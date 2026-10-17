@@ -2,6 +2,8 @@
 
 [Documentation index](index.md) | [Project overview](../README.md)
 
+Current release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 The Raspberry Pi 5 with 4 GB RAM reads one protected reverse-light input and
 controls the existing sensor Nano and OLED Nano through their separate USB
 ports. Both supplied Nano builds default to reverse control: sensors boot idle,
