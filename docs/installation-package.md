@@ -7,6 +7,9 @@ that sorts before the final `0.5.1` Debian version.
 The commands below use the beta package and offline bundle filenames. Earlier
 release artifacts retain their original version identities and checksums.
 
+See the [Version 0.5.1 - Beta release notes](release-notes-v0.5.1-beta.md)
+for changes, verification results, and known limitations.
+
 ## Target and contents
 
 The package targets **Raspberry Pi OS Lite 64-bit Trixie on Raspberry Pi 5

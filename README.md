@@ -1,6 +1,7 @@
 # Project Optic Coyote
 
 Release: **v0.5.1-beta**. Debian packaging uses **`0.5.1~beta`**.
+[Release notes — Version 0.5.1 - Beta](docs/release-notes-v0.5.1-beta.md).
 The Debian package and Trixie arm64 offline bundle use this beta version.
 See the [installation package guide](docs/installation-package.md) for setup
 and verification boundaries.
