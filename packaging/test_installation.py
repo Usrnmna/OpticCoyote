@@ -145,9 +145,10 @@ class InstallationTests(unittest.TestCase):
             self.assertIn('usr/bin/optic-coyote-' + command, files)
         self.assertFalse(any(p.startswith('etc/') for p in files))
         self.assertIn('usr/share/doc/project-optic-coyote/draft-gpio-link/README.md', files)
-        preview = Path('docs/images/oled-distance-layout.png')
-        self.assertEqual((staged / 'usr/share/doc/project-optic-coyote' / preview).read_bytes(),
-                         (build_package.ROOT / preview).read_bytes())
+        for image in ('oled-distance-layout.png', 'project-banner.png', 'project-status.svg'):
+            preview = Path('docs/images') / image
+            self.assertEqual((staged / 'usr/share/doc/project-optic-coyote' / preview).read_bytes(),
+                             (build_package.ROOT / preview).read_bytes(), str(preview))
         for guide in [Path('README.md'), Path('draft-gpio-link/README.md'),
                       *(path.relative_to(build_package.ROOT)
                         for path in (build_package.ROOT / 'docs').glob('*.md'))]:

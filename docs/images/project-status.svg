@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="650" height="32" viewBox="0 0 650 32" role="img" aria-labelledby="title">
+  <title id="title">Beta | Local operation | Hardware acceptance pending</title>
+  <g font-family="Verdana, DejaVu Sans, sans-serif" font-size="13" font-weight="600" text-anchor="middle">
+    <rect x="0" y="0" width="72" height="32" rx="6" fill="#fbbf24"/>
+    <text x="36" y="21" fill="#111827">BETA</text>
+    <rect x="82" y="0" width="170" height="32" rx="6" fill="#123545"/>
+    <text x="167" y="21" fill="#a5f3fc">LOCAL OPERATION</text>
+    <rect x="262" y="0" width="388" height="32" rx="6" fill="#273343"/>
+    <text x="456" y="21" fill="#fef3c7">HARDWARE ACCEPTANCE PENDING</text>
+  </g>
+</svg>

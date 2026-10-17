@@ -51,6 +51,8 @@ def stage(destination, version):
         write_text(destination / 'usr/lib/systemd/system' / unit, (ROOT / 'packaging' / unit).read_text())
     # Keep the README and documentation tree together for guide-to-guide links.
     for source in [ROOT / 'README.md', ROOT / 'draft-gpio-link/README.md',
+                   ROOT / 'docs/images/project-banner.png',
+                   ROOT / 'docs/images/project-status.svg',
                    ROOT / 'docs/images/oled-distance-layout.png',
                    *sorted((ROOT / 'docs').glob('*.md'))]:
         target = destination / 'usr/share/doc/project-optic-coyote' / source.relative_to(ROOT)
