@@ -2,6 +2,8 @@
 
 [Project overview](../README.md) · [Current source and release status](current-state.md)
 
+Current release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 ## Installation and operation
 
 | Task | Guide |
@@ -37,7 +39,7 @@ standalone builds; they are not interchangeable with reverse session commands.
 | Inspect reverse GPIO/USB operation and diagnostic evidence | [Reverse diagnostics](reverse-diagnostics.md) |
 | Adjust configuration constants, inspect code roles, or run regression checks | [Development and adjustment](development.md) |
 | Distinguish current source behavior from distribution contents | [Current source status](current-state.md) |
-| Review changes and upgrade considerations after the original beta artifacts | [Unreleased source notes](release-notes-unreleased.md) |
+| Inspect current release contents, upgrade considerations, and artifacts | [v0.5.2-beta release notes](release-notes-v0.5.2-beta.md) |
 | Inspect the original beta artifacts and their recorded verification | [v0.5.1-beta release notes](release-notes-v0.5.1-beta.md) |
 
 ## Historical reference

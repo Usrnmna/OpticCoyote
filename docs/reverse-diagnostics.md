@@ -2,6 +2,8 @@
 
 [Documentation index](index.md) | [Project overview](../README.md)
 
+Current release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 [`diagnose_reverse.py`](../rpi-oled-bridge/diagnose_reverse.py) checks the reverse
 control path for the **Raspberry Pi 5 with 4 GB RAM**. The report records this
 project target; it does not detect the Pi model or installed RAM. Markdown and

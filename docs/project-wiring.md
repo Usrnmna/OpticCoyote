@@ -2,6 +2,8 @@
 
 [Documentation index](index.md) | [Project overview](../README.md)
 
+Current release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 This is the assembly-level reference for Project Optic Coyote. It covers the
 implemented ultrasonic-to-OLED USB path and the independent AHD camera path
 with two rear-facing exterior mirror-area cameras. Reverse control adds one

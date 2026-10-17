@@ -2,6 +2,8 @@
 
 [Documentation index](index.md) | [Project overview](../README.md)
 
+Current release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 Use this reference with the [project wiring scheme](project-wiring.md).
 **Board header labels, Raspberry Pi BCM numbers, physical header positions, and
 chip package pin numbers are different numbering systems.** Each diagram states

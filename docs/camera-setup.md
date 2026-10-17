@@ -2,6 +2,8 @@
 
 [Documentation index](index.md) · [Project overview](../README.md)
 
+Current release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 The supplied configuration displays live video from one of two cameras fullscreen through the Pi HDMI output at 1280x720. It starts on a configured camera and supports continuous selection through standard input and **both GPIO and USB serial** once their pins/port are configured; GPIO and serial are initially disabled. It uses no recording, video files, Ethernet, Wi-Fi, HTTP, RTSP or cloud service. Keep source and sink edits local and live-only: the configured GStreamer strings are executable pipeline instructions, and validation does not enforce that restriction.
 
 The supported installation enables [blinker trigger mode](#blinker-trigger-mode), starts with no camera capture, selects a mapped left/right camera, and retains that view through blinker OFF gaps. BOTH stops camera capture and displays black. This mode uses two protected GPIO inputs and owns selection exclusively; it does not change the sensor or OLED firmware.

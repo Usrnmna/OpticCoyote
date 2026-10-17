@@ -148,6 +148,11 @@ class InstallationTests(unittest.TestCase):
         preview = Path('docs/images/oled-distance-layout.png')
         self.assertEqual((staged / 'usr/share/doc/project-optic-coyote' / preview).read_bytes(),
                          (build_package.ROOT / preview).read_bytes())
+        for guide in [Path('README.md'), Path('draft-gpio-link/README.md'),
+                      *(path.relative_to(build_package.ROOT)
+                        for path in (build_package.ROOT / 'docs').glob('*.md'))]:
+            self.assertEqual((staged / 'usr/share/doc/project-optic-coyote' / guide).read_bytes(),
+                             (build_package.ROOT / guide).read_bytes(), str(guide))
 
     def test_offline_verification_rejects_corruption_and_extra_files(self):
         bundle = self.root / 'bundle'

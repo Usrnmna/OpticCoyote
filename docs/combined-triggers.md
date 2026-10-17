@@ -2,6 +2,8 @@
 
 [Documentation index](index.md) | [Project overview](../README.md)
 
+Current release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 The recommended operating system is Raspberry Pi OS Lite (64-bit), Debian 13
 Trixie. Complete the [Pi 5 (4 GB) setup guide](rpi5-setup.md) for installation,
 dependencies, permissions, and console HDMI configuration.
@@ -223,8 +225,8 @@ Targeted verification passed 245 Python tests (104 selector, 106 bridge/reverse,
 locale. Four C++ firmware host harnesses passed, including a check that each
 rear sensor retains its CSV label and column when it becomes the nearest zone.
 These results do not establish physical camera orientation, GPIO behavior,
-acoustic coverage, or display latency. Packages and installers were not rebuilt
-for this review; existing archives do not include its source/documentation fixes.
+acoustic coverage, or display latency. These source and documentation corrections
+are included in the [v0.5.2-beta release](release-notes-v0.5.2-beta.md).
 
 ## Software verification
 

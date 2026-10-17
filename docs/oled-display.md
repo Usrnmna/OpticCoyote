@@ -2,6 +2,8 @@
 
 [Documentation index](index.md) | [Project overview](../README.md)
 
+Current release: [v0.5.2-beta](release-notes-v0.5.2-beta.md) (Debian `0.5.2~beta`).
+
 For the complete assembly, use the [project wiring scheme](project-wiring.md)
 and [controller/module pinouts](component-pinouts.md). This guide covers the
 display path's installation and operation.
@@ -373,8 +375,9 @@ and undefined-behavior sanitizers, plus 141 Python tests (106 bridge/reverse and
 35 integration). The display sketch compiled for
 `arduino:avr:nano:cpu=atmega328` with 19488 bytes of program storage and 700 bytes
 of static RAM. The SSD1306 framebuffer is allocated dynamically and is not
-included in that static RAM figure. No device was flashed. Packages, offline
-bundles, and installers have not been rebuilt for this revision.
+included in that static RAM figure. No device was flashed. The [v0.5.2-beta release](release-notes-v0.5.2-beta.md)
+includes the updated Pi code and documentation; its source archive includes
+the OLED firmware and compiled default Nano build.
 
 ### OLED source review
 
@@ -389,7 +392,8 @@ selects idle. The new regression failed before this correction and passed after 
 No clipping, rounding, cap-token, sensor-slot, or reverse lease regression was
 found in the reviewed paths. The host raster still matches the documented
 preview exactly. Physical readability, GPIO/USB timing, and OLED transfer behavior
-remain unverified. Packages and installers have not been rebuilt.
+remain unverified. These corrections are included in v0.5.2-beta; Nano firmware
+upload remains separate from Pi package installation.
 
 For a standalone OLED-only bench check, close the bridge, open the display Nano in Serial
 Monitor at 115200, wait for reset, and send `D,305,610,914,1219` with a newline.

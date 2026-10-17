@@ -2,12 +2,10 @@
 
 [Documentation index](index.md) · [Project overview](../README.md)
 
-This document describes the current source tree. The
-[v0.5.1-beta release notes](release-notes-v0.5.1-beta.md) describe earlier
-artifacts and their recorded verification; matching version text does not imply
-identical source or documentation contents.
-The [unreleased source notes](release-notes-unreleased.md) summarize subsequent
-changes and upgrade considerations without assigning a new release version.
+The current release is **v0.5.2-beta** (`0.5.2~beta` in Debian metadata).
+Its [release notes](release-notes-v0.5.2-beta.md) describe the updated applications,
+firmware source, documentation, artifacts, and verification scope. The
+[v0.5.1-beta notes](release-notes-v0.5.1-beta.md) apply only to the original builds.
 
 ## Current behavior
 
@@ -30,9 +28,11 @@ that every capped raw reading is at least 3048 mm.
 
 The following results were recorded for the corresponding source revisions.
 They are separate scopes, not one combined test count or a new hardware result.
+Documentation and Git-rule counts describe their recorded review snapshots.
 
 | Revision scope | Recorded evidence |
 | --- | --- |
+| v0.5.2-beta release | 304 Python tests, four firmware host harnesses, shell/systemd checks, and both default reverse-mode Nano compilations; artifact checks are recorded beside the release files |
 | Two-camera implementation | 303 main Python tests, 11 historical compatibility tests, four C++ firmware harnesses, and sensor Nano compilation |
 | Camera/sensor-identity review | 245 targeted Python tests and four C++ firmware harnesses; default/swapped mappings, sensor slots, and reverse/blinker coexistence |
 | OLED implementation and review | 141 bridge/integration tests; both display C++ harnesses with address/undefined-behavior sanitizers; display Nano compilation |
@@ -49,16 +49,16 @@ Reproduction commands and limitations are in the [development guide](development
 
 ## Distribution boundary
 
-Existing beta release packages, the offline bundle, and the initial two-camera
-package do not contain all subsequent review fixes, OLED changes, or reorganized
-documentation. Packages and installers have not been rebuilt for these changes.
-The subsequent documentation corrections and Git-file maintenance also remain
-source-tree changes. The counts above record those reviews before these release
-notes were added; they are not a current repository inventory.
-The [installation guide](installation-package.md#subsequent-source-review) records
-that boundary; historical release hashes continue to identify their original
-artifacts. Nano firmware must be compiled and uploaded separately from Pi package
-installation.
+The v0.5.2-beta Debian package and offline installer include the current Pi
+applications and maintained documentation. The accompanying source archive
+contains the full project, including the Nano sketches, headers, host tests,
+Git-file rules, and compiled default reverse-mode Nano firmware. Nano firmware
+must be uploaded separately; Pi installation does not flash either board.
+
+Original v0.5.1-beta and intermediate two-camera artifacts remain older snapshots.
+Their hashes and test records do not describe v0.5.2-beta. Current artifact
+filenames, checksum instructions, and verification details are in the
+[release notes](release-notes-v0.5.2-beta.md#release-artifacts).
 
 ## Documentation organization
 
