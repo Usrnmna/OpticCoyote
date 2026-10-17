@@ -77,7 +77,15 @@ arduino-cli compile --fqbn arduino:avr:nano:cpu=atmega328 optic_coyote_display
 Compile does not upload. Use each board's verified port when uploading. Close
 serial monitors and bridge processes before uploading or starting the bridge.
 
-On the Pi:
+On the Pi, use the recommended Raspberry Pi OS Lite (64-bit), Debian 13 Trixie
+baseline for the Pi 5 (4 GB). Complete the [Pi setup guide](rpi5-setup.md)
+before configuring reverse control:
+
+The [installation package](installation-package.md) instead uses
+`/etc/project-optic-coyote/reverse.json` and explicit device roles in
+`devices.json`. Successful setup enables both reverse and camera services for
+boot without starting them immediately; failed configuration leaves both
+disabled. Stop the reverse service before running the source commands below.
 
 ```sh
 sudo apt install python3-serial python3-gpiozero python3-lgpio

@@ -1,0 +1,9 @@
+# Local packaging experiments and Python imports; release output lives in ../dist/.
+.build/
+__pycache__/
+# Alternate local output locations for package experiments.
+/dist/
+/apt-work-*/
+/project-optic-coyote_*_all.deb
+/project-optic-coyote_*_all.json
+/project-optic-coyote_*_trixie_arm64_offline*

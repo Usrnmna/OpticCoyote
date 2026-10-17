@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+if [ "$1" = configure ]; then
+    for group in optic-coyote video render gpio dialout; do
+        if ! getent group "$group" >/dev/null; then
+            addgroup --system "$group"
+        fi
+    done
+    if ! getent passwd optic-coyote >/dev/null; then
+        adduser --system --ingroup optic-coyote --home /var/lib/project-optic-coyote \
+            --no-create-home --shell /usr/sbin/nologin optic-coyote
+    fi
+    install -d -o optic-coyote -g optic-coyote -m 0750 /var/lib/project-optic-coyote
+    /usr/bin/python3 -B /usr/lib/project-optic-coyote/packaging/optic_coyote_cli.py initialize
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+    fi
+    echo 'Optic Coyote installed; services have not been started. Run sudo optic-coyote-setup.'
+fi

@@ -1,5 +1,24 @@
 # Project Optic Coyote
 
+Release: **v0.5.1-beta**. Debian packaging uses **`0.5.1~beta`**.
+The Debian package and Trixie arm64 offline bundle use this beta version.
+See the [installation package guide](docs/installation-package.md) for setup
+and verification boundaries.
+
+## Recommended Raspberry Pi OS
+
+Use **Raspberry Pi OS Lite (64-bit), Debian 13 Trixie**, on the
+**Raspberry Pi 5 with 4 GB RAM**. The [Pi 5 setup guide](docs/rpi5-setup.md)
+covers image installation, packages, permissions, console HDMI output, component
+configuration, and hardware acceptance checks. This recommendation is not a
+completed hardware compatibility qualification.
+
+The [installation package guide](docs/installation-package.md) covers the
+Debian package, offline dependency bundle, installed CLI commands, configuration,
+and separate camera/reverse systemd services. Initial package installation leaves
+services disabled. Successful `sudo optic-coyote-setup` enables both for boot
+without starting them immediately; failed configuration leaves both disabled.
+
 ## Wiring and pinout documentation
 
 - [Project wiring scheme](docs/project-wiring.md): whole-project text diagram,
@@ -399,9 +418,10 @@ No Pi enumeration, sustained capture, unique-frame-rate, decode performance, HDM
 
 ### Install on the Pi
 
-Target: Raspberry Pi OS Lite 64-bit on the **Raspberry Pi 5 with 4 GB RAM**, and a monitor supporting 720p60 on the first HDMI port. Copy [`rpi-ahd-selector/`](rpi-ahd-selector/) to `~/rpi-ahd-selector` using an SD card or USB drive. Install these packages once, or pre-provision the OS image for a completely offline installation:
+Recommended target: **Raspberry Pi OS Lite (64-bit), Debian 13 Trixie**, on the **Raspberry Pi 5 with 4 GB RAM**, and a monitor supporting 720p60 on the first HDMI port. Complete the [Pi 5 setup guide](docs/rpi5-setup.md) for OS installation and whole-project provisioning. For camera-only setup, copy [`rpi-ahd-selector/`](rpi-ahd-selector/) to `~/rpi-ahd-selector` using an SD card or USB drive. Install these packages once, or pre-provision the OS image for a completely offline installation:
 
 ```sh
+sudo apt update
 sudo apt install python3 gstreamer1.0-tools gstreamer1.0-plugins-base \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav \
   v4l-utils python3-gpiozero python3-lgpio python3-serial

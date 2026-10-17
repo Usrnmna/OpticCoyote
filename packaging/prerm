@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+case "$1" in
+    remove|upgrade|deconfigure)
+        if [ -d /run/systemd/system ]; then
+            systemctl stop optic-coyote-camera.service optic-coyote-reverse.service
+        fi
+        ;;
+esac
+if [ "$1" = remove ] && command -v systemctl >/dev/null; then
+    systemctl disable optic-coyote-camera.service optic-coyote-reverse.service
+fi

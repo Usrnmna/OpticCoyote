@@ -1,0 +1,29 @@
+[Unit]
+Description=Optic Coyote blinker camera selector
+After=local-fs.target systemd-udev-trigger.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=optic-coyote
+Group=optic-coyote
+SupplementaryGroups=video render gpio dialout
+StateDirectory=project-optic-coyote
+WorkingDirectory=/var/lib/project-optic-coyote
+ExecStart=/usr/bin/python3 -B /usr/lib/project-optic-coyote/packaging/optic_coyote_cli.py service camera
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=3
+TimeoutStopSec=15
+KillMode=mixed
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

@@ -103,6 +103,8 @@ python3 rpi-buzzer/buzzer.py --config rpi-buzzer/buzzer.local.json --list
 python3 -m unittest discover -s rpi-buzzer -p 'test_*.py' -v
 ```
 
+The [Pi 5 (4 GB) setup guide](rpi5-setup.md) defines the recommended Raspberry
+Pi OS Lite (64-bit), Debian 13 Trixie baseline and GPIO package provisioning.
 After electrical review, pin assignment, configuration, and enabling on the Pi:
 
 ```sh
