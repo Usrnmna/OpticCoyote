@@ -189,7 +189,9 @@ def configure(directory=CONFIG):
     for key in ('trigger_left_pin', 'trigger_right_pin', 'trigger_left_camera', 'trigger_right_camera'):
         camera[key] = prompt_value(key, camera[key], int)
     for index, source in enumerate(camera['sources']):
-        camera['sources'][index] = prompt_value(f'Camera {index + 1} GStreamer source', source)
+        side = "left" if index + 1 == camera["trigger_left_camera"] else "right"
+        prompt = f"Camera {index + 1} ({side} mirror, rear-facing) GStreamer source"
+        camera["sources"][index] = prompt_value(prompt, source)
     camera['trigger_enabled'] = True
     # The installed service uses blinker control; manual transports remain separate.
     camera['gpio_pins'] = []

@@ -1,3 +1,4 @@
+// Retired four-camera prototype; not a substitute for reverse-controlled sensing.
 #include <Wire.h>
 
 /*

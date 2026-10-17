@@ -1,5 +1,7 @@
 # Rear-bumper OLED display through Raspberry Pi USB
 
+[Documentation index](index.md) | [Project overview](../README.md)
+
 For the complete assembly, use the [project wiring scheme](project-wiring.md)
 and [controller/module pinouts](component-pinouts.md). This guide covers the
 display path's installation and operation.
@@ -18,8 +20,8 @@ The untagged CSV/D commands and continuous forwarding examples below describe
 Do not mix standalone firmware or bridge operation with reverse mode.
 
 The four rear-bumper sensors appear as **1, 2, 3, 4 from left to right** on a
-0.91-inch SSD1306 **128x32 I2C** OLED. Each distance is rounded to one decimal
-place in feet. For example, 305, 610, 914, and 1219 mm display as:
+0.91-inch SSD1306 **128x32 I2C** OLED. Each available distance is rounded to one decimal
+place in feet, with rounded values above 9.9 shown as `≥10`. For example, 305, 610, 914, and 1219 mm display as:
 
 ```text
       1       2       3       4
@@ -27,9 +29,64 @@ place in feet. For example, 305, 610, 914, and 1219 mm display as:
                  ft
 ```
 
-Values such as `10.0` and `16.4` still fit their columns. `--.-` means unavailable.
+The display uses these three forms:
+
+| Input state | Visible value |
+| --- | --- |
+| Valid rounded distance from 0.0 through 9.9 feet | One decimal, without a leading space |
+| Valid rounded distance greater than 9.9 feet | `≥10` |
+| Missing, failed, invalid, or stale measurement | `-.-` |
+
+Zero remains `0.0`; it is not a fault marker. The cap is applied **after rounding**:
+3032 mm displays `9.9`, while 3033 mm displays `≥10`. Thus `≥10` denotes the
+rounded display category, not a claim that the raw distance is at least 3048 mm.
+Validity is checked first: only 0..30000 mm is accepted as a measurement;
+`-1` is the unavailable sentinel. Raw millimetres, alarms, logging, and USB frames
+are unchanged. Malformed packets are rejected atomically and do not refresh
+freshness; existing valid values remain until their established timeout expires.
+
 There is no scrolling or alternating between sensors. The label stays above its
 fixed column; numbers never reorder themselves by distance.
+
+### Fixed pixel layout
+
+| Element | Position and size |
+| --- | --- |
+| Sensor labels 1–4 | Default small font, visible rows 0–6; x = 13, 45, 77, 109 |
+| Distance values | Custom 9×16 digit and `≥` glyph cells, rows 8–23 |
+| Decimal point | 3-pixel width within the same 16-pixel row; 3×3 visible dot |
+| Shared `ft` footer | Default small font at x = 58, y = 25; visible rows 25–31 |
+| Column boundaries | Four 32-pixel columns starting at x = 0, 32, 64, 96 |
+
+Each value is centered by its glyph width, with one pixel between glyphs.
+Decimal and unavailable values occupy 23 pixels, starting four pixels into the
+column; `≥10` occupies 29 pixels, starting one pixel into the column. Integer
+centering leaves the extra margin pixel on the right. Rows 7 and 24 remain clear.
+The fixed font size does not change with distance. The full framebuffer is cleared
+before each changed view, preventing residual pixels when field widths shrink.
+
+The glyph rows and geometry are defined in
+[distance_glyphs.h](../optic_coyote_display/distance_glyphs.h). The bitmaps reside
+in AVR program memory, without a heap allocation for the font. A private `>`
+render token selects the complete `≥` bitmap; it is neither a USB protocol value
+nor text printed using the default font. The formatter and cached fields retain
+five-byte buffers, with both unused bytes zeroed for deterministic comparisons.
+
+The following image is an 8× nearest-neighbor enlargement of the host test
+framebuffer for `0.0`, `9.9`, `≥10`, and `-.-`. It illustrates the raster layout;
+it does not establish physical OLED visibility or viewing distance.
+
+![Host-rendered OLED layout](images/oled-distance-layout.png)
+
+Reverse qualification, independent acquisition/display leases, stale-data timing,
+release on LOW, hazard behavior, and simultaneous reverse/blinker operation are
+unchanged. An active reverse session without fresh readings displays four `-.-`
+fields. Freshness is checked before drawing and again before an OLED transfer.
+If data expires while glyphs are drawn, the pending numeric frame is replaced
+with `-.-`. Lease expiry takes priority and selects the idle renderer, currently
+blank. A transfer already underway cannot be recalled; expiry during that
+transfer is reflected at the next scheduled refresh. Explicit standalone mode uses the same glyphs and formatting, with its
+existing per-sensor freshness limitation described below.
 
 ## Hardware roles and files
 
@@ -66,6 +123,7 @@ Use data-capable cables with connectors matching the actual boards.
 | Sensor Nano | [Existing ultrasonic sketch](../optic_coyote_ultrasonic/optic_coyote_ultrasonic.ino) | Existing `Config` polling and sensor settings. |
 | Pi | [bridge.py](../rpi-oled-bridge/bridge.py) | CLI USB paths, `--sensor-order`, `--stale-seconds`, `--boot-seconds`; timing constants at the top. |
 | Display Nano | [New display sketch](../optic_coyote_display/optic_coyote_display.ino) | `Config` OLED address, landscape rotation, and timeout. |
+| Distance glyphs | [distance_glyphs.h](../optic_coyote_display/distance_glyphs.h) | Flash-resident glyph rows, widths, spacing, and vertical position. |
 | Display protocol | [display_protocol.h](../optic_coyote_display/display_protocol.h) | Bounded input parsing and integer conversion to tenths of a foot. |
 | Reverse control | [reverse_control.py](../rpi-oled-bridge/reverse_control.py), [reverse.json](../rpi-oled-bridge/reverse.json) | GPIO qualification, session freshness, ownership, and fault recovery. |
 | Reverse diagnostic | [diagnose_reverse.py](../rpi-oled-bridge/diagnose_reverse.py), [test procedure](reverse-diagnostics.md) | Software checks and optional GPIO/USB observations; controller ACKs do not verify OLED pixels. |
@@ -74,29 +132,42 @@ Use data-capable cables with connectors matching the actual boards.
 Standalone forwarding consumes the **ultrasonic** Nano's CSV. A different optical
 sensor controller would need to produce the same CSV format or have an explicit
 parser added; this implementation does not guess another device's protocol.
-The camera selector and draft GPIO programs retain their separate interfaces.
+The two-camera blinker selector retains its separate interface. The GPIO camera-warning draft is retired.
 
 ## Sensor order
 
 The default bridge mapping is the order of the four distance columns, independent
 of their labels or the `nearest_zone` alarm field:
 
-| Screen position | Rear-bumper sensor | Default mux channel | Existing CSV column label |
+| Screen position | Rear-bumper sensor | Default mux channel | CSV column label |
 | --- | --- | --- | --- |
-| Leftmost | 1 | 0 | `front_left_mm` |
-| Second | 2 | 1 | `front_right_mm` |
-| Third | 3 | 2 | `rear_left_mm` |
-| Rightmost | 4 | 3 | `rear_right_mm` |
+| Leftmost | 1 | 0 | `rear_far_left_mm` |
+| Second | 2 | 1 | `rear_left_middle_mm` |
+| Third | 3 | 2 | `rear_middle_mm` |
+| Rightmost | 4 | 3 | `rear_far_right_mm` |
 
-The old front/rear names remain in the sensor firmware for compatibility. For
-this installation all four sensors are on the rear bumper. Arrange the physical
-sensors in the desired left-to-right screen order and label their cables 1-4.
-Check that order from the intended viewing orientation during installation.
+All four sensors face directly backwards from the rear bumper: 1 far left,
+2 left-middle, 3 rear-middle, and 4 far right. Left and right refer to the vehicle
+facing forward. Label cables 1-4 and verify each numbered OLED column with a
+target at that physical sensor. CSV headers use these rear-position names; the
+bridge also accepts older headers by column position for standalone compatibility.
 
-If existing cables run in the reverse order, pass `--sensor-order 4 3 2 1` on
-the Pi. Any permutation containing 1, 2, 3, and 4 exactly once is supported.
-Those numbers select reported sensor positions in either mode, not raw mux channel numbers. If
-the sensor sketch's `kMuxChannels` order changes, check the mapping again.
+### Preserve physical sensor identities
+
+`Config::kMuxChannels` in the sensor firmware maps physical sensors 1-4 to mux
+channels. Correct reversed or crossed cabling there, or correct the wiring, so
+packet slots, CSV labels, `nearest_zone`, diagnostics, and OLED columns agree.
+For example, if sensors 1, 2, 3, 4 connect to mux channels 3, 2, 1, 0, set
+`kMuxChannels` to `{3, 2, 1, 0}` and rebuild/upload the sensor firmware. Keep
+`kZoneLabels` in physical sensor order and the bridge order at `1 2 3 4`.
+
+`--sensor-order` is a display-only permutation of packet slots in both modes.
+It does not change firmware identities or CSV labels. For example,
+`--sensor-order 4 3 2 1` puts slot 4 under OLED label 1; it is not a complete
+correction for incorrectly mapped physical sensors. A foreground CLI override
+also does not persist into the installed reverse service, which uses the default
+order. Use the firmware mapping for the supported installation; retain this
+CLI option only for an explicitly controlled display test.
 
 ## Connect the OLED to the display Nano
 
@@ -135,7 +206,7 @@ the electrical compatibility of an unidentified third-party breakout.
 2. Install **Adafruit SSD1306**, **Adafruit GFX Library**, and **Adafruit BusIO**
    through Library Manager, accepting their dependencies.
 3. Open `optic_coyote_display/optic_coyote_display.ino`. Keep
-   `display_protocol.h` in the same folder.
+   all supplied `.h` files, including `distance_glyphs.h`, in the same folder.
 4. Select **Arduino Nano**, **ATmega328P**, and the display Nano's port. If the
    actual board uses the older bootloader, choose **ATmega328P (Old Bootloader)**.
 5. Upload to the **display Nano**. Keep the ultrasonic sketch on the sensor Nano.
@@ -203,7 +274,8 @@ the camera service for boot without starting them immediately. This foreground
 standalone command does not create a service; stop the installed reverse service
 before using it to avoid competing for the same USB endpoints.
 
-To reverse the sensor wiring order or change timing:
+For a temporary display-only reversal or timing test (this does not correct
+firmware sensor identities or configure the installed service):
 
 ```sh
 python3 rpi-oled-bridge/bridge.py \
@@ -235,7 +307,7 @@ Both links use **115200 baud, 8N1**, without flow control.
   not create new sensor readings. The OLED redraws changed text at most ten
   times per second.
 - **No data:** startup, never-read sensors, and explicit `-1` values display
-  `--.-`. A sensor stream silent for two seconds makes the Pi send four missing
+  `-.-`. A sensor stream silent for two seconds makes the Pi send four missing
   values. The display independently clears values after two seconds without a
   valid display packet, plus its next refresh interval. Invalid packets never
   refresh that timeout or partially update the screen.
@@ -265,6 +337,8 @@ python3 -m unittest discover -s rpi-oled-bridge -p "test_*.py" -v
 arduino-cli compile --fqbn arduino:avr:nano:cpu=atmega328 optic_coyote_display
 g++ -std=c++11 -Wall -Wextra -Werror -I tests/display tests/display/test_display.cpp -o /tmp/optic-coyote-display-test
 /tmp/optic-coyote-display-test
+g++ -std=c++11 -Wall -Wextra -Werror -I tests/display tests/display/test_reverse_display.cpp -o /tmp/optic-coyote-reverse-display-test
+/tmp/optic-coyote-reverse-display-test
 ```
 
 On Windows with MinGW:
@@ -277,12 +351,50 @@ if ($LASTEXITCODE -eq 0) { & "$env:TEMP/optic-coyote-display-test.exe" }
 The tests protect column order, decimal rounding, partial/malformed/oversized
 frames, atomic updates, stale-stream behavior, reset/header handling, short
 writes, port cleanup, millis rollover, and simulated OLED recovery. Host drawing
-tests record text coordinates; they do not render through the physical display.
+tests rasterize every supported decimal and special field in every column at
+rotations 0 and 2,
+reject out-of-screen pixel writes, check margins and separator rows, and verify
+the equality bar in `≥`. Framebuffer comparisons cover width changes, startup,
+stale data, recovery, full-scene 180-degree rotation, and release to blank idle.
+Every accepted integer distance from 0 through 30000 mm is checked against exact
+half-tenth rounding boundaries. Changes between raw measurements that share the
+`≥10` category refresh data without unnecessary OLED transfers. Deterministic
+drawing delays exercise stale-data and lease expiry before transfer, including
+millis rollover and a previously displayed unavailable view. These are software checks;
+they do not render through the physical display.
+
+An optional argument to `/tmp/optic-coyote-display-test`, such as
+`/tmp/optic-coyote-display-test /tmp/oled-layout.pbm`, exports the representative
+128×32 framebuffer as a PBM image. The documentation preview is that image
+enlarged by eight using nearest-neighbor sampling.
+
+The reviewed layout revision passed both display C++ host harnesses with address
+and undefined-behavior sanitizers, plus 141 Python tests (106 bridge/reverse and
+35 integration). The display sketch compiled for
+`arduino:avr:nano:cpu=atmega328` with 19488 bytes of program storage and 700 bytes
+of static RAM. The SSD1306 framebuffer is allocated dynamically and is not
+included in that static RAM figure. No device was flashed. Packages, offline
+bundles, and installers have not been rebuilt for this revision.
+
+### OLED source review
+
+The review reproduced a freshness-boundary defect: a frame could begin drawing
+while data was fresh and transfer numeric values after the data deadline.
+`distancePacketFresh()` now supplies a common freshness check for rendering and
+pre-transfer validation. The pending frame is invalidated and redrawn with
+unavailable markers, even when the previous transferred frame already contained
+those markers. Ownership is checked after the redraw so lease expiry still
+selects idle. The new regression failed before this correction and passed after it.
+
+No clipping, rounding, cap-token, sensor-slot, or reverse lease regression was
+found in the reviewed paths. The host raster still matches the documented
+preview exactly. Physical readability, GPIO/USB timing, and OLED transfer behavior
+remain unverified. Packages and installers have not been rebuilt.
 
 For a standalone OLED-only bench check, close the bridge, open the display Nano in Serial
 Monitor at 115200, wait for reset, and send `D,305,610,914,1219` with a newline.
 Expect `1.0 2.0 3.0 4.0` under labels 1-4. Values expire after two seconds unless
-you send another packet. Send `D,-1,0,5000,30000` to check `--.- 0.0 16.4 98.4`.
+another packet arrives. Send `D,-1,0,5000,30000` to check `-.- 0.0 ≥10 ≥10`.
 Then close Serial Monitor and start the Pi bridge.
 
 On the assembled hardware, move an object in front of each rear sensor and

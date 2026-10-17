@@ -1,5 +1,7 @@
 # Reverse and blinker modes operating together
 
+[Documentation index](index.md) | [Project overview](../README.md)
+
 The recommended operating system is Raspberry Pi OS Lite (64-bit), Debian 13
 Trixie. Complete the [Pi 5 (4 GB) setup guide](rpi5-setup.md) for installation,
 dependencies, permissions, and console HDMI configuration.
@@ -50,12 +52,12 @@ to restore that worker. An unplugged serial endpoint instead retries normally.
 
 The supplied blinker pins are BCM17 and BCM27. Reverse deliberately has no
 default pin. Assign a distinct unused GPIO in `reverse.local.json`; BCM22 is
-an example only when the optional four-line camera draft and other peripherals
+an example only when the retired four-line camera draft and other peripherals
 are not using it. BCM numbers and physical header positions differ. The
 [wiring guide](project-wiring.md) describes the protected 3.3 V input interfaces.
 
-The blinker selector rejects simultaneous use of its four-line `gpio_pins`
-input mode. Do not run the separate GPIO draft receiver on pins used by either
+The blinker selector rejects simultaneous use of its manual two-line `gpio_pins`
+input mode. Do not run the retired GPIO draft receiver on pins used by either
 trigger process. GPIO construction/claim errors abort startup and close any
 already acquired resources before starting control workers. Host tests inject
 these failures; actual Pi pin allocation behavior remains unverified.
@@ -173,7 +175,7 @@ python3 rpi-oled-bridge/bridge.py \
 ```
 
 Run these in separate terminals or independently configured services. The
-[reverse guide](reverse-trigger.md) and [blinker configuration reference](../README.md#blinker-trigger-mode)
+[reverse guide](reverse-trigger.md) and [blinker configuration reference](camera-setup.md#blinker-trigger-mode)
 describe each process's settings. Restart the affected process after editing
 its configuration and rerun the combined check after changing assignments.
 
@@ -207,6 +209,23 @@ its capture load can still delay reverse USB service. Reverse freshness and
 lease checks handle delayed/missing replies conservatively. A sustained-load
 test is required before choosing final timing, power, hub, and camera settings.
 
+## Two-camera source review, 2026-10-16
+
+The review verified the default and swapped camera mappings, preserved all four
+rear sensor positions through blinker/hazard transitions, and checked reverse
+LOW release independently of the retained blinker view. No runtime selection or
+coexistence defect was found in those paths. The sensor-mapping guidance was
+corrected: firmware `kMuxChannels` establishes physical identities, whereas
+`--sensor-order` changes only OLED presentation and is not persisted by setup.
+
+Targeted verification passed 245 Python tests (104 selector, 106 bridge/reverse,
+35 integration) with `LC_ALL=C LANG=C LANGUAGE=C`, matching the host verifier's
+locale. Four C++ firmware host harnesses passed, including a check that each
+rear sensor retains its CSV label and column when it becomes the nearest zone.
+These results do not establish physical camera orientation, GPIO behavior,
+acoustic coverage, or display latency. Packages and installers were not rebuilt
+for this review; existing archives do not include its source/documentation fixes.
+
 ## Software verification
 
 ```sh
@@ -216,7 +235,11 @@ python3 -m unittest discover -s rpi-oled-bridge -p 'test_*.py' -v
 python3 -m unittest discover -s rpi-buzzer -p 'test_*.py' -v
 ```
 
-The integration suite exercises interleaved BOTH/reverse transitions, reverse
+The integration suite verifies default and swapped left/right camera mappings
+while reverse ranging continues through LEFT, BOTH, and RIGHT states. Distinct,
+non-sorted distances remain in all four OLED slots; a failed sensor 3 remains
+unavailable in column 3 without shifting other values or camera selection.
+The suite also exercises interleaved BOTH/reverse transitions, reverse
 LOW during a blocked camera launch, preservation of blinker OFF-gap hold,
 GPIO claim failures, cooperative serial contention, partial port acquisition,
 short serial replies, failed camera teardown, configuration aliases, character
@@ -248,7 +271,7 @@ No physical equipment was available for the 2026-10-14 review. GPIO electrical
 behavior, sensor operation, visible OLED/HDMI output, camera capture, USB hub
 contention, and response timing remain untested. The
 [reverse diagnostic](reverse-diagnostics.md) and
-[adapter diagnostic](../README.md#pi-side-adapter-diagnostic) provide separate
+[adapter diagnostic](camera-diagnostics.md#pi-side-adapter-diagnostic) provide separate
 procedures for later hardware validation; they must not compete with running
 owners of the same ports or capture devices.
 

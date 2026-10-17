@@ -1,8 +1,10 @@
 # Project wiring and connection scheme
 
+[Documentation index](index.md) | [Project overview](../README.md)
+
 This is the assembly-level reference for Project Optic Coyote. It covers the
-implemented ultrasonic-to-OLED USB path, the independent AHD camera path, and
-the separately maintained GPIO camera-warning draft. Reverse control adds one
+implemented ultrasonic-to-OLED USB path and the independent AHD camera path
+with two rear-facing exterior mirror-area cameras. Reverse control adds one
 protected Pi input to gate sensor acquisition and OLED distance ownership.
 
 An [optional Pi buzzer](pi-buzzer.md) adds one GPIO logic output for later
@@ -37,8 +39,8 @@ reference designators.
 | S1-S4 | RCWL-1655 or protocol-compatible AJ-SR04M modules | Rear-bumper distances, numbered left to right on the OLED |
 | N2 | Second ELEGOO Nano of the same type | Receives distance packets and drives the OLED |
 | O1 | 0.91-inch SSD1306 128x32 I2C OLED module | Four distance columns in decimal feet |
-| C1-C4 | GreenYi AHD cameras, [ASIN B0C3R5Y7K1](https://www.amazon.com/GreenYi-Reverse-Trailer-Adjustable-Fisheye/dp/B0C3R5Y7K1) | Four independently selectable video inputs; camera identity does not establish electrical specifications or tested operation |
-| V1-V4 | GRACETOP AHD-to-USB-A 2.0 adapters, ASIN B0DZ2HT7TD | Intended independent V4L2 feeds; listing model GTDE-ABV2USBC, part GTUS-AHD2USB; hardware operation unverified |
+| C1-C2 | GreenYi AHD cameras, [ASIN B0C3R5Y7K1](https://www.amazon.com/GreenYi-Reverse-Trailer-Adjustable-Fisheye/dp/B0C3R5Y7K1) | Left and right mirror-area rear-facing views; camera identity does not establish electrical specifications or tested operation |
+| V1-V2 | GRACETOP AHD-to-USB-A 2.0 adapters, ASIN B0DZ2HT7TD | Intended independent V4L2 feeds; listing model GTDE-ABV2USBC, part GTUS-AHD2USB; hardware operation unverified |
 | H1 | Powered USB hub for camera interfaces | Expands Pi host ports; power/bandwidth must fit the actual devices |
 | D1 | HDMI monitor | Shows the selected camera; separate from O1 |
 
@@ -48,7 +50,7 @@ reference designators.
 Rear bumper / sensor order used on the OLED:
 
      S1                 S2                 S3                 S4
-  leftmost          second slot        third slot         rightmost
+  far left          left-middle        rear-middle        far right
      | I2C              | I2C              | I2C              | I2C
      v                  v                  v                  v
  M1 SC0/SD0          M1 SC1/SD1          M1 SC2/SD2          M1 SC3/SD3
@@ -84,10 +86,9 @@ Rear bumper / sensor order used on the OLED:
 
 Independent camera path on the same Pi:
 
- C1 AHD OUT ---> V1 AHD capture --USB--+
- C2 AHD OUT ---> V2 AHD capture --USB--+
- C3 AHD OUT ---> V3 AHD capture --USB--+--> H1 powered USB hub
- C4 AHD OUT ---> V4 AHD capture --USB--+            |
+ C1 LEFT mirror  ---> V1 AHD capture --USB--+
+ C2 RIGHT mirror ---> V2 AHD capture --USB--+--> H1 powered USB hub
+                                                       |
                                                   USB upstream
                                                        |
                                                   P1 USB-A host
@@ -155,15 +156,18 @@ The default mapping is:
 
 | Sensor | Mux channel | CSV distance field | OLED column |
 | --- | --- | --- | --- |
-| S1 | 0 | `front_left_mm` | 1, leftmost |
-| S2 | 1 | `front_right_mm` | 2 |
-| S3 | 2 | `rear_left_mm` | 3 |
-| S4 | 3 | `rear_right_mm` | 4, rightmost |
+| S1 | 0 | `rear_far_left_mm` | 1, leftmost |
+| S2 | 1 | `rear_left_middle_mm` | 2 |
+| S3 | 2 | `rear_middle_mm` | 3 |
+| S4 | 3 | `rear_far_right_mm` | 4, rightmost |
 
-All four sensors are on the rear bumper for this installation. The CSV names
-are legacy labels, not front-bumper placement instructions. Verify the desired
-viewing orientation with one target per sensor; adjust `--sensor-order` on the
-Pi if cable order differs. Do not infer camera positions from these sensor names.
+All four sensors face directly rearward from the rear bumper. S1 is far left,
+S2 left-middle, S3 rear-middle, and S4 far right. Verify the required
+viewing orientation with one target per sensor. If cable order differs, correct
+the wiring or the sensor firmware's `kMuxChannels` mapping and retain physical
+slot order 1-4. A Pi display permutation alone leaves CSV zone identities
+unchanged; see [sensor identities](oled-display.md#preserve-physical-sensor-identities).
+Do not infer camera positions from these sensor names.
 
 N1 enables one mux channel at a time. Keep the four downstream SDA/SCL pairs
 separate. M1 address straps and reset connection follow the
@@ -225,7 +229,7 @@ Selected OLED supply ------------> O1 VCC
 OLED supply return --------------> N2 GND + O1 GND
 
 Hub-compatible PSU ------> H1 powered hub --> capture adapters as rated
-Camera-compatible supply -------> C1-C4 power inputs as individually specified
+Camera-compatible supply -------> C1-C2 power inputs as individually specified
 Monitor-compatible supply ------> D1 power input
 ```
 
@@ -253,16 +257,14 @@ not established by firmware or these text diagrams.
 | --- | --- | --- |
 | C1 video output | V1 AHD input | Match the camera's AHD format and connector |
 | C2 video output | V2 AHD input | Same condition |
-| C3 video output | V3 AHD input | Same condition |
-| C4 video output | V4 AHD input | Same condition |
-| V1-V4 USB | H1 downstream USB ports | Four independent V4L2 feeds |
+| V1-V2 USB | H1 downstream USB ports | Two independent V4L2 feeds |
 | H1 upstream USB | P1 USB host | Hub data connection |
 | P1 HDMI output used by the selector | D1 HDMI input | Appropriate cable for the Pi's connector |
 
 The AHD sources are the GreenYi cameras identified by
 [Amazon ASIN B0C3R5Y7K1](https://www.amazon.com/GreenYi-Reverse-Trailer-Adjustable-Fisheye/dp/B0C3R5Y7K1),
 including the left and right camera views. The
-[camera identity reference](../README.md#greenyi-camera-identity) records the
+[camera identity reference](camera-setup.md#greenyi-camera-identity) records the
 listing-verification limits. Camera revision, harness pinout, supply, and native
 frame rate remain subject to confirmation; the capture adapter's MJPEG 60 fps
 mode is not evidence of the camera's native exposure rate.
@@ -281,16 +283,16 @@ automotive harness requires a separately verified transition to the module's
 video input and return. Camera revisions, harness lead order, required supply
 voltage, and the adapter's 5 V output capacity remain unverified. Keep camera
 power separate unless the complete supply requirements are established.
-The [adapter specification and Pi verification reference](../README.md#gracetop-adapter-identity-and-advertised-specifications)
+The [adapter specification and Pi verification reference](camera-setup.md#gracetop-adapter-identity-and-advertised-specifications)
 distinguishes listing claims from hardware evidence and provides MJPEG 720p60
 checks for P1, the Raspberry Pi 5 with 4 GB RAM.
 
-One multi-input capture unit can replace the four logical V1-V4 interfaces only
-when it exposes four independent usable feeds to the existing software. A
+One multi-input capture unit can replace the two logical V1-V2 interfaces only
+when it exposes two independent usable feeds to the existing software. A
 combined quad-view image does not meet that interface. The supplied
-[camera configuration](../rpi-ahd-selector/config.json) lists `/dev/video0`,
-`/dev/video2`, `/dev/video4`, and `/dev/video6` as placeholders; identify the actual
-devices before assigning camera numbers. The [camera setup](../README.md#ahd-camera-selection-raspberry-pi)
+[camera configuration](../rpi-ahd-selector/config.json) lists `/dev/video0`
+and `/dev/video2` as placeholders; identify the actual
+devices before assigning camera numbers. The [camera setup](camera-setup.md#ahd-camera-selection-raspberry-pi)
 describes capture requirements and stable device paths.
 
 ## Reverse trigger input
@@ -336,7 +338,7 @@ AHD video   --> existing AHD capture interfaces --> Pi USB --> HDMI display
 | Conditioned left trigger | GPIO17 | 11 | Select mapped left camera |
 | Conditioned right trigger | GPIO27 | 13 | Select mapped right camera |
 
-These pins overlap the separate four-wire GPIO draft. Trigger mode requires
+These pins overlap the retired four-wire GPIO draft. Trigger mode requires
 `gpio_pins: []`; do not run the draft listener or another GPIO owner on the
 trigger pins. Confirm the selected pins are available on the installed Pi.
 
@@ -345,8 +347,8 @@ tolerant; see the [Raspberry Pi voltage specifications](https://www.raspberrypi.
 Use an interface with suitable voltage thresholds, current limiting, transient
 and reverse-voltage protection, filtering, and a defined inactive output.
 An optically isolated interface can provide the signal boundary if its complete
-input circuit is rated for the vehicle environment. The existing Arduino NPN
-draft below is not a validated automotive-voltage input circuit.
+input circuit is rated for the vehicle environment. The retired Arduino NPN
+GPIO draft is not a validated automotive-voltage input circuit.
 
 Determine nominal system voltage, maximum operating voltage, switching polarity,
 PWM/diagnostic pulse behavior, and input loading limits before selecting the
@@ -364,7 +366,7 @@ Keep cameras powered from their specified supply while the system is operating;
 the trigger selects capture rather than repeatedly switching camera power.
 Only one mapped camera capture runs at a time. BOTH and expired all-LOW inputs
 stop camera capture and request generated black output. The
-[trigger setup and timing reference](../README.md#blinker-trigger-mode) describes
+[trigger setup and timing reference](camera-setup.md#blinker-trigger-mode) describes
 OFF-gap retention, hazard skew, GPIO fault handling, and bench verification.
 Hold tuning must allow the OFF gap plus qualification of the next ON pulse and
 a sampling/scheduling margin. Once an OFF timer is armed, unqualified input
@@ -372,46 +374,12 @@ chatter cannot postpone its expiry. BOTH requests software capture termination;
 an operating-system launch already in progress may briefly open a device before
 it can be terminated. This GPIO path is not a hardware capture interlock.
 
-## Optional GPIO camera-warning draft
+## Retired GPIO camera-warning draft
 
-This section describes the separate
-[draft sketch](../draft-gpio-link/arduino_camera_warning/arduino_camera_warning.ino)
-and [Pi warning receiver](../draft-gpio-link/warning_receiver.py). It is not
-enabled by the normal sensor or display sketch. Substituting the draft changes
-the sensor firmware and its serial behavior; do not treat it as a simultaneous
-feature of N1's normal USB/OLED setup.
-
-For each of the four channels, the existing draft uses this circuit:
-
-```text
-Arduino Dn --- 10 kOhm ---+---- B   NPN transistor
-                        |     C --------+------- Pi GPIO input
-                     100 kOhm           |
-                        |             10 kOhm
-Common GND -------------+---- E         |
-                                    Pi 3V3
-
-Arduino GND ----------------------- Pi GND (physical pin 6, for example)
-```
-
-`B`, `C`, and `E` are transistor functions, not numbered package leads. Match the
-actual transistor datasheet. Arduino HIGH turns the transistor on and pulls the
-Pi input LOW. The collector pull-up goes to Pi **3.3 V**, never Arduino 5 V.
-[Raspberry Pi GPIO voltage reference](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#voltage-specifications).
-
-| Camera selection | Draft Arduino pin | Pi BCM GPIO | Pi physical header pin |
-| --- | --- | --- | --- |
-| 1 | D4 | GPIO17 | 11 |
-| 2 | D5 | GPIO27 | 13 |
-| 3 | D6 | GPIO22 | 15 |
-| 4 | D7 | GPIO23 | 16 |
-
-The receiver defaults to active-low. The four channels are held selection
-signals, not I2C, distance values, or a binary-encoded number. See the
-[draft instructions](../README.md#draft-arduino-to-pi-gpio-connection) for
-receiver setup and its distinct limitations. A direct trigger/echo sensor
-alternative mentioned in the older sensor document remains a proposal and is
-not part of the implemented wiring shown here.
+The four-wire sensor-to-camera prototype is outside the supported installation.
+It must not replace the reverse-controlled sensor firmware or share GPIO pins
+with the blinker service. The [historical draft](../draft-gpio-link/README.md)
+retains the prototype wiring and protocol for reference only.
 
 ## Verification boundary
 

@@ -62,12 +62,13 @@ constexpr uint8_t kSensorCount = 4;
 // Channels must be distinct, in 0..7. Labels must be nonempty and contain no
 // commas/newlines and at most 23 characters to fit the serial packet buffer.
 // Renaming a label changes its CSV header and nearest_zone.
-// The Pi OLED bridge maps these four column positions to rear-bumper sensors
-// 1..4 left to right. The legacy labels below do not set their physical location;
-// see docs/oled-display.md for the bridge's adjustable cable mapping.
+// Rear-facing bumper positions: 1 far left, 2 left-middle, 3 rear-middle,
+// 4 far right. Left/right follow the vehicle facing forward. The Pi bridge
+// preserves this order on the OLED. Correct cable assignments in kMuxChannels;
+// a Pi display permutation alone does not change these firmware identities.
 constexpr uint8_t kMuxChannels[] = {0, 1, 2, 3};
 const char *const kZoneLabels[] = {
-    "front_left", "front_right", "rear_left", "rear_right"};
+    "rear_far_left", "rear_left_middle", "rear_middle", "rear_far_right"};
 
 // Milliseconds: wait for one I2C measurement.
 // I2C mode requires at least 100 ms after each trigger (datasheet page 5).

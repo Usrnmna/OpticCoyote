@@ -1,9 +1,8 @@
-# Local packaging experiments and Python imports; release output lives in ../dist/.
-.build/
-__pycache__/
-# Alternate local output locations for package experiments.
+# Alternate output from packaging-directory runs; normal output lives in ../dist/.
+# Build directories and Python caches inherit the repository-root rules.
 /dist/
 /apt-work-*/
 /project-optic-coyote_*_all.deb
+/project-optic-coyote_*_all.deb.sha256
 /project-optic-coyote_*_all.json
 /project-optic-coyote_*_trixie_arm64_offline*

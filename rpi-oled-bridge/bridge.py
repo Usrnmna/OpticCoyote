@@ -215,7 +215,7 @@ def parse_args(argv=None):
     parser.add_argument("--sensor-port", help="Sensor Nano path, preferably /dev/serial/by-path/...")
     parser.add_argument("--display-port", help="Display Nano path, preferably /dev/serial/by-path/...")
     parser.add_argument("--sensor-order", type=int, nargs=4, default=DEFAULT_SENSOR_ORDER,
-                        metavar="N", help="CSV distance slots in screen order (default: 1 2 3 4)")
+                        metavar="N", help="Packet slots in OLED column order; display-only, not firmware sensor IDs (default: 1 2 3 4)")
     parser.add_argument("--boot-seconds", type=finite_positive, default=BOOT_SECONDS)
     parser.add_argument("--stale-seconds", type=finite_positive, default=STALE_SECONDS,
                         help="Blank all values after this many seconds without a valid sensor row")

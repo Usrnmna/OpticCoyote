@@ -1,11 +1,18 @@
 # Raspberry Pi installation package
 
-The current source release is **v0.5.1-beta**, represented as **`0.5.1~beta`**
+[Documentation index](index.md) | [Project overview](../README.md)
+
+The release baseline is **v0.5.1-beta**, represented as **`0.5.1~beta`**
 in Debian package metadata and filenames. The tilde identifies a prerelease
 that sorts before the final `0.5.1` Debian version.
 
 The commands below use the beta package and offline bundle filenames. Earlier
 release artifacts retain their original version identities and checksums.
+
+This guide describes the current source implementation. Existing packages and
+offline bundles do not contain all later two-camera, OLED, and documentation
+changes, despite sharing the version baseline. Consult the
+[current source status](current-state.md#distribution-boundary) before installation.
 
 See the [Version 0.5.1 - Beta release notes](release-notes-v0.5.1-beta.md)
 for changes, verification results, and known limitations.
@@ -73,14 +80,49 @@ Rebuild a bundle for the updated baseline when required. The manifest records
 exact versions and upstream sources; checksums detect corruption but are not a
 publisher signature. Transfer the bundle through a trusted channel.
 
+## Existing four-source configuration migration
+
+Existing files in `/etc/project-optic-coyote/` are preserved during package
+installation. A four-source `camera.json` is rejected by the two-camera
+validator; setup does not guess physical camera identities or truncate it.
+
+Before enabling the updated camera service:
+
+1. Stop the camera and reverse services before changing their configuration.
+2. Back up `camera.json`. Retain exactly the two physically identified mirror
+   camera pipelines in `sources`, preferably using stable `/dev/v4l/by-id/` or
+   `/dev/v4l/by-path/` identities. Set left=1 and right=2 when ordered left/right.
+3. Set `initial_camera` to 1 or 2, `trigger_enabled` to `true`, and `gpio_pins`
+   to `[]`. Retain the verified trigger polarity, pins, and timing. Camera
+   commands 3/4 and four-value manual input snapshots are no longer accepted.
+4. Run `sudo optic-coyote-setup --enable camera reverse` to validate assignments
+   and enable boot startup. This does not start the services immediately.
+
+The sensor firmware retains four distance slots and the existing reverse
+protocol. Correct crossed sensor wiring in `kMuxChannels`, preserving physical
+IDs 1-4 and the default bridge order; a foreground `--sensor-order` override
+changes only the display and is not saved by setup. See
+[sensor identity guidance](oled-display.md#preserve-physical-sensor-identities).
+Standalone CSV headers and `nearest_zone` now use `rear_far_left`,
+`rear_left_middle`, `rear_middle`, and `rear_far_right`. External CSV consumers
+that match names must update those names. The Pi bridge continues accepting
+older column labels by position. Sensor 3 remains rear-middle.
+
+Hardware acceptance requires checking each blinker against the physical camera,
+hazard blanking, hold through blink OFF gaps, direction changes, and simultaneous
+reverse ranging. Measure activation-to-first-usable-image and left/right switching
+time on the installed capture devices. Place a target at each numbered rear sensor
+and verify its corresponding OLED column, including unavailable indications after
+a sensor failure. Software tests do not establish these physical results.
+
 ## Configuration and CLI commands
 
 `sudo optic-coyote-setup` checks Pi 5/Trixie/arm64, Python bindings, and required
 GStreamer elements, lists stable device paths,
-and prompts for sensor/display serial roles, the reverse GPIO pin, left/right
-blinker pins and camera mappings, and all four capture pipelines. Empty input
+and collects sensor/display serial assignments, the reverse GPIO pin, left/right
+blinker pins and camera mappings, and both capture pipelines (left and right). Empty input
 retains existing values. Confirm physical roles explicitly, especially for
-identical CH340 adapters. See [capture configuration](../README.md#configure-the-capture-devices)
+identical CH340 adapters. See [capture configuration](camera-setup.md#configure-the-capture-devices)
 and [protected wiring](project-wiring.md).
 
 Both services must be stopped before configuration or enablement changes;
@@ -105,7 +147,7 @@ enablement command below. Metadata validation does not qualify physical wiring.
 | Command | Purpose |
 | --- | --- |
 | `optic-coyote-setup` | Configure assignments and automatically enable both services for boot after successful validation |
-| `optic-coyote-setup --enable camera reverse` | Validate existing settings and enable both without prompting for assignments |
+| `optic-coyote-setup --enable camera reverse` | Validate existing settings and enable both without changing assignments |
 | `optic-coyote-setup --init-only` | Create missing local configuration without replacing existing settings or changing service enablement |
 | `optic-coyote-setup --list-devices` | List stable video and serial paths without opening devices |
 | `optic-coyote-setup --hdmi-720p60` | Append the HDMI0 720p60 boot mode; preserve a backup, reject conflicting modes, and preserve service enablement |
@@ -233,6 +275,40 @@ repositories at build time, not a promise that a later rebuild resolves the
 same versions. Package installation can be tested in an isolated Linux root;
 simulation alone does not prove maintainer-script execution or boot behavior.
 No physical Pi, camera, GPIO, USB, or display result follows from host checks.
+
+### Subsequent source review
+
+The [current source status](current-state.md) separates current behavior and
+documentation from previously generated distribution artifacts.
+The [unreleased source notes](release-notes-unreleased.md) collect subsequent
+changes and migration considerations, including documentation corrections and
+Git-file maintenance. These updates do not assign a new package version.
+
+The [two-camera source review](combined-triggers.md#two-camera-source-review-2026-10-16)
+corrected sensor identity guidance and added focused regression coverage.
+The subsequent [OLED layout revision](oled-display.md#fixed-pixel-layout) adds
+9×16 distance glyphs, the `≥10` cap, and `-.-` unavailable markers.
+Its [source review](oled-display.md#oled-source-review) also corrects data expiry
+during rendering and expands formatting, rotation, and deadline tests.
+Packages, offline bundles, and installers have not been rebuilt for these revisions
+or the subsequent documentation reorganization, review corrections, and release notes;
+earlier archives do not contain these latest changes. The results below describe
+the initial two-camera revision, not newly generated distribution artifacts.
+
+### Two-camera revision verification, 2026-10-16
+
+The two-camera source revision passed 303 Python tests (32 packaging, 104 camera,
+106 bridge/reverse, 27 buzzer, and 34 integration), plus 11 retained prototype
+compatibility tests. Four firmware host harnesses and shell/systemd definition
+checks passed in WSL. The sensor firmware compiled for
+`arduino:avr:nano:cpu=atmega328`; no device was flashed.
+
+The checks cover two-source validation, rejected camera 3/4 commands, physical-role
+setup role assignments, sensor CSV labels/order, blink gaps, hazard blanking, reverse
+coexistence, and simulated device faults. Physical camera identity/orientation,
+video latency, vehicle signal behavior, and ultrasonic accuracy remain unverified.
+The earlier release lifecycle evidence below applies to that release baseline;
+it is not a new installation or hardware result for this source revision.
 
 ### Recorded verification, 2026-10-16
 

@@ -1,8 +1,16 @@
 # Project Optic Coyote — Version 0.5.1 - Beta
 
+[Documentation index](index.md) | [Project overview](../README.md)
+
 Release date: **2026-10-16**  
 Release identifier: **`v0.5.1-beta`**  
 Debian package version: **`0.5.1~beta`**
+
+These notes describe the original beta artifacts. Later source changes and
+reorganized guides are recorded in [current source status](current-state.md);
+the existing artifacts have not been rebuilt to contain those changes.
+The [unreleased source notes](release-notes-unreleased.md) summarize subsequent
+camera, sensor, OLED, documentation, and Git-file changes separately from this release.
 
 ## Overview
 

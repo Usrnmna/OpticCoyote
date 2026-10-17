@@ -52,9 +52,9 @@ def build_parser():
     parser.add_argument("--timeout", type=positive_seconds, default=DEFAULT_TIMEOUT_SECONDS,
                         help="seconds allowed for each serial read or write")
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--camera", type=int, choices=range(1, 5), help="select camera 1-4")
-    group.add_argument("--inputs", nargs=4, type=int, choices=(0, 1),
-                       help="camera 1-4 input snapshot; lowest active input wins")
+    group.add_argument("--camera", type=int, choices=range(1, 3), help="select camera 1-2")
+    group.add_argument("--inputs", nargs=2, type=int, choices=(0, 1),
+                       help="camera 1-2 input snapshot; lowest active input wins")
     group.add_argument("--status", action="store_true", help="request current selection/status")
     return parser
 

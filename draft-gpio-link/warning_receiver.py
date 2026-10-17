@@ -6,6 +6,7 @@ Use --selector-json to feed the existing camera selector through a pipe.
 Reading order: defaults -> decoding/debounce -> reporting -> GPIO loop -> CLI.
 """
 
+# Retired four-camera prototype; not part of the supported blinker installation.
 import argparse
 from contextlib import ExitStack
 import json

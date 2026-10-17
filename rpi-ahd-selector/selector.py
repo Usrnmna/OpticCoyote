@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Four-source camera selector for Raspberry Pi OS Lite (64-bit).
+"""Two-source camera selector for Raspberry Pi OS Lite (64-bit).
 
 Reading order: configuration/command building -> shared State -> video worker ->
 JSON framing/control workers -> main (startup and cleanup). Edit config.json for
@@ -82,7 +82,7 @@ NUMERIC_LIMITS = {
 }
 
 # Fixed protocol and internal scheduling limits; these are not hardware settings.
-CAMERA_COUNT = 4
+CAMERA_COUNT = 2
 MAX_COMMAND_BYTES = 1024
 SERIAL_READ_BYTES = 256
 STDIN_READ_BYTES = 4096
@@ -92,15 +92,15 @@ STDIN_POLL_SECONDS = 0.1
 def camera_number(value):
     """Return a valid 1-based camera number; reject booleans and other types."""
     if type(value) is not int or value not in range(1, CAMERA_COUNT + 1):
-        raise ValueError("camera must be an integer from 1 to 4")
+        raise ValueError("camera must be an integer from 1 to 2")
     return value
 
 
 def resolve_inputs(values, current):
-    """Choose the lowest asserted input (1..4), or hold current if all are off."""
+    """Choose the lowest asserted input (1..2), or hold current if all are off."""
     if (not isinstance(values, list) or len(values) != CAMERA_COUNT
             or any(type(v) not in (bool, int) or v not in (0, 1) for v in values)):
-        raise ValueError("inputs must contain exactly four booleans or 0/1 values")
+        raise ValueError("inputs must contain exactly two booleans or 0/1 values")
     return next((i + 1 for i, v in enumerate(values) if v), current)
 
 
@@ -122,14 +122,14 @@ def validate(config):
         raise ValueError(f"initial_camera: {exc}") from exc
     sources = config.get("sources")
     if not isinstance(sources, list) or len(sources) != CAMERA_COUNT:
-        raise ValueError("configure exactly four source pipelines")
+        raise ValueError("configure exactly two source pipelines")
     if any(not isinstance(s, str) or not s.strip() for s in sources):
         raise ValueError("each source must be a nonempty GStreamer pipeline")
     pins = config["gpio_pins"]
     if not isinstance(pins, list) or (pins and (
             len(pins) != CAMERA_COUNT or any(type(p) is not int or not 0 <= p <= 27 for p in pins)
             or len(set(pins)) != CAMERA_COUNT)):
-        raise ValueError("gpio_pins must be empty or four distinct BCM pin numbers 0..27")
+        raise ValueError("gpio_pins must be empty or two distinct BCM pin numbers 0..27")
     if type(config["gpio_active_low"]) is not bool:
         raise ValueError("gpio_active_low must be boolean")
     for name in ("trigger_enabled", "trigger_active_low"):
@@ -276,7 +276,7 @@ class State:
             self.selected = camera_number(camera)
 
     def inputs(self, values):
-        """Atomically resolve a four-input request against the current selection."""
+        """Atomically resolve a two-input request against the current selection."""
         with self.lock:
             if self.trigger_enabled:
                 raise ValueError("camera selection is controlled by blinker trigger mode")
@@ -496,7 +496,7 @@ def poll_gpio(state, buttons, stop, config=None):
     """Submit only changed input combinations stable for the debounce interval.
 
     Releasing all inputs holds the selection. Debounce applies to the complete
-    four-button combination; buttons are already normalized for active polarity.
+    two-button combination; buttons are already normalized for active polarity.
     """
     config = config or {}
     sample_seconds = config.get("gpio_sample_seconds", DEFAULTS["gpio_sample_seconds"])
@@ -540,7 +540,7 @@ def main(argv=None):
     """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", type=Path, default=Path(__file__).with_name("config.json"))
-    parser.add_argument("--demo", action="store_true", help="use four test patterns")
+    parser.add_argument("--demo", action="store_true", help="use two test patterns")
     parser.add_argument("--headless", action="store_true", help="discard video for testing")
     parser.add_argument("--check-config", action="store_true",
                         help="validate settings and print effective config/pipelines without hardware access")

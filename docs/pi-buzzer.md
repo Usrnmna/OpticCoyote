@@ -1,5 +1,7 @@
 # Optional Raspberry Pi buzzer
 
+[Documentation index](index.md) | [Project overview](../README.md)
+
 The Raspberry Pi 5, 4 GB RAM model can drive one optional buzzer through
 `rpi-buzzer/buzzer.py`. Named finite patterns are available for later programs
 to call. No reverse, blinker, distance, or BOTH-state binding is defined. The
@@ -58,7 +60,7 @@ boot and GPIO release; no resistor value or existing onboard bias is assumed.
 Software cannot guarantee silence during power faults, kernel failure, forced
 termination, or a stuck output stage. BCM and physical header numbers differ.
 
-The chosen pin must be unused by reverse, blinker, the optional GPIO draft,
+The chosen pin must be unused by reverse, blinker, the retired GPIO draft,
 and other peripherals. Include `--buzzer-config` in the
 [combined assignment check](combined-triggers.md#software-only-setup-check).
 Assigned buzzer pins remain reserved even when disabled. The checker does not

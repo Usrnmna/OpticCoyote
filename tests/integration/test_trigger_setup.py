@@ -17,7 +17,7 @@ CAMERA = setup.selector.validate({
     **json.loads((ROOT / "rpi-ahd-selector/config.json").read_text()), "trigger_enabled": True,
 })
 REVERSE = {**setup.reverse_control.load_config(ROOT / "rpi-oled-bridge/reverse.json"), "reverse_gpio_pin": 22}
-DEVICE_PATHS = ["sensor", "display", "/dev/video0", "/dev/video2", "/dev/video4", "/dev/video6"]
+DEVICE_PATHS = ["sensor", "display", "/dev/video0", "/dev/video2"]
 
 
 def metadata(number, mode=stat.S_IFCHR):

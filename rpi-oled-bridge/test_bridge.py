@@ -9,8 +9,8 @@ from unittest.mock import patch
 import bridge
 
 
-HEADER = b"time_ms,front_left_mm,front_right_mm,rear_left_mm,rear_right_mm,nearest_zone,nearest_mm,state"
-ROW = b"100,305,610,914,1219,front_left,305,WARNING"
+HEADER = b"time_ms,rear_far_left_mm,rear_left_middle_mm,rear_middle_mm,rear_far_right_mm,nearest_zone,nearest_mm,state"
+ROW = b"100,305,610,914,1219,rear_far_left,305,WARNING"
 
 
 class FakeStop:
@@ -61,6 +61,13 @@ class FakePort:
 
 
 class BridgeTests(unittest.TestCase):
+    def test_legacy_header_preserves_numbered_sensor_order(self):
+        legacy = b"time_ms,front_left_mm,front_right_mm,rear_left_mm,rear_right_mm,nearest_zone,nearest_mm,state"
+        self.assertTrue(bridge.is_sensor_header(legacy))
+        values = bridge.parse_sensor_row(ROW)
+        self.assertEqual(bridge.display_packet(values, bridge.DEFAULT_SENSOR_ORDER),
+                         b"D,305,610,914,1219\n")
+
     def test_existing_csv_and_sensor_order(self):
         values = bridge.parse_sensor_row(ROW)
         self.assertEqual(values, (305, 610, 914, 1219))
@@ -73,8 +80,8 @@ class BridgeTests(unittest.TestCase):
         self.assertIsNotNone(bridge.parse_sensor_row(ROW.replace(b"100,", b"0,", 1)))
 
     def test_edited_zone_names_keep_column_mapping(self):
-        self.assertTrue(bridge.is_sensor_header(HEADER.replace(b"front_left", b"rear-left sensor")))
-        self.assertEqual(bridge.parse_sensor_row(ROW.replace(b"front_left", b"rear-left sensor")),
+        self.assertTrue(bridge.is_sensor_header(HEADER.replace(b"rear_far_left", b"rear-left sensor")))
+        self.assertEqual(bridge.parse_sensor_row(ROW.replace(b"rear_far_left", b"rear-left sensor")),
                          (305, 610, 914, 1219))
 
     def test_malformed_rows_do_not_become_distances(self):
@@ -83,7 +90,7 @@ class BridgeTests(unittest.TestCase):
                     ROW.replace(b"305", b"1.0"), ROW.replace(b"305", b"+1"),
                     ROW.replace(b"305", b" 1"), ROW.replace(b"305", b""),
                     ROW.replace(b"100,", b"4294967296,", 1), b"\0" + ROW,
-                    ROW.replace(b"WARNING", b"BROKEN"), ROW.replace(b"front_left", b"\xff")]
+                    ROW.replace(b"WARNING", b"BROKEN"), ROW.replace(b"rear_far_left", b"\xff")]
         for row in bad_rows:
             with self.subTest(row=row):
                 self.assertIsNone(bridge.parse_sensor_row(row))

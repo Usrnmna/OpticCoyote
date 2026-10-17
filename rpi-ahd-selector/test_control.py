@@ -18,8 +18,8 @@ class CommandTests(unittest.TestCase):
 
     def test_command_messages(self):
         for options, expected in (
-            (["--camera", "4"], {"camera": 4}),
-            (["--inputs", "0", "1", "0", "0"], {"inputs": [0, 1, 0, 0]}),
+            (["--camera", "2"], {"camera": 2}),
+            (["--inputs", "0", "1"], {"inputs": [0, 1]}),
             (["--status"], {"status": True}),
         ):
             with self.subTest(options=options):
@@ -27,6 +27,14 @@ class CommandTests(unittest.TestCase):
                 message = control.make_message(args)
                 self.assertTrue(message.endswith("\n"))
                 self.assertEqual(json.loads(message), expected)
+
+    def test_four_camera_protocol_is_rejected(self):
+        for options in (["--camera", "3"], ["--camera", "4"],
+                        ["--inputs", "0", "1", "0", "0"]):
+            with self.subTest(options=options), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    control.build_parser().parse_args(options)
+                self.assertEqual(caught.exception.code, 2)
 
     def test_invalid_tuning_is_rejected_before_opening_a_port(self):
         for option, value in (

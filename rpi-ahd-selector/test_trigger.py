@@ -125,10 +125,25 @@ class TriggerConfigTests(unittest.TestCase):
             with self.subTest(name=name, value=value), self.assertRaises(ValueError):
                 trigger_config(**{name: value})
 
+    def test_default_sides_select_their_capture_paths_and_hazards_capture_neither(self):
+        config = trigger_config()
+        state = selector.State(1, config)
+        for mode, camera, device in (("LEFT", 1, "/dev/video0"),
+                                     ("RIGHT", 2, "/dev/video2")):
+            state.trigger(mode)
+            selected = state.snapshot()["selected_camera"]
+            self.assertEqual(selected, camera)
+            self.assertIn(f"device={device}", selector.command(config, selected))
+        for mode in ("BOTH", "IDLE"):
+            state.trigger(mode)
+            selected = state.snapshot()["selected_camera"]
+            self.assertIsNone(selected)
+            self.assertNotIn("v4l2src", selector.command(config, selected))
+
     def test_custom_mapping_and_startup_ignore_initial_camera(self):
-        state = selector.State(1, trigger_config(trigger_left_camera=4, trigger_right_camera=3))
+        state = selector.State(1, trigger_config(trigger_left_camera=2, trigger_right_camera=1))
         self.assertIsNone(state.snapshot()["selected_camera"])
-        for name, camera in (("LEFT", 4), ("RIGHT", 3), ("BOTH", None), ("IDLE", None)):
+        for name, camera in (("LEFT", 2), ("RIGHT", 1), ("BOTH", None), ("IDLE", None)):
             state.trigger(name)
             self.assertEqual(state.snapshot()["selected_camera"], camera)
             self.assertEqual(state.snapshot()["trigger_state"], name)
@@ -138,7 +153,7 @@ class TriggerConfigTests(unittest.TestCase):
         for name in ("IDLE", "LEFT", "RIGHT", "BOTH", "FAULT"):
             state.trigger(name)
             before = state.snapshot()
-            for command in ('{"camera":4}', '{"inputs":[1,0,0,0]}'):
+            for command in ('{"camera":2}', '{"inputs":[1,0]}'):
                 reply = selector.apply_message(state, command)
                 self.assertFalse(reply["ok"])
                 self.assertIn("trigger mode", reply["error"])

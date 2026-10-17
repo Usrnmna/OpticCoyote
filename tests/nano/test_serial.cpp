@@ -87,6 +87,12 @@ int main() {
   assert(Serial.output.empty());
   command("RT\r\n");
   assert(lines().size() == 1 && lines()[0].find("time_ms,") == 0);
+  // The published header and slot ordering identify the four rear bumper positions.
+  assert(lines()[0] == "time_ms,rear_far_left_mm,rear_left_middle_mm,rear_middle_mm,"
+                       "rear_far_right_mm,nearest_zone,nearest_mm,state");
+  for (uint8_t sensor = 0; sensor < 4; ++sensor) {
+    assert(Config::kMuxChannels[sensor] == sensor);
+  }
   checkPushes(1000);
   assert(lines().size() > 5);
   assert(sensors[0].latestDistanceMm > sensors[0].filteredDistanceMm);
@@ -288,6 +294,23 @@ int main() {
   recordSuccessfulReading(1, 888);
   for (int n = 0; n < 100; ++n) serviceSerialOutput();
   assert(lines().size() == 3 && fields(lines().back())[2] == "888");
+
+  // Each physical slot retains its CSV identity when it becomes the nearest zone.
+  const char *expectedLabels[] = {
+      "rear_far_left", "rear_left_middle", "rear_middle", "rear_far_right"};
+  for (uint8_t nearest = 0; nearest < 4; ++nearest) {
+    reset();
+    command("START\n");
+    Serial.output.clear();
+    for (uint8_t slot = 0; slot < 4; ++slot) {
+      recordSuccessfulReading(slot, slot == nearest ? 250 : 1000 + slot * 100);
+    }
+    for (int n = 0; n < 100; ++n) serviceSerialOutput();
+    const auto row = fields(lines().back());
+    assert(row[5] == expectedLabels[nearest] && row[6] == "250");
+    for (uint8_t slot = 0; slot < 4; ++slot)
+      assert(std::stoi(row[slot + 1]) == (slot == nearest ? 250 : 1000 + slot * 100));
+  }
 
   // Reverse-mode expiry must not change standalone successful-history filtering.
   reset();

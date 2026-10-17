@@ -55,14 +55,14 @@ class AssignmentTests(unittest.TestCase):
                 self.check(camera={**CAMERA, "serial_port": "control-alias"}, sensor="sensor-alias")
 
     def test_capture_duplicates_and_serial_capture_overlap_are_rejected(self):
-        for sources in ((CAMERA["sources"][0],) * 4,
+        for sources in ((CAMERA["sources"][0],) * 2,
                         ("v4l2src device=sensor ! decodebin", *CAMERA["sources"][1:])):
             with self.assertRaisesRegex(ValueError, "Device conflict"):
                 self.check(camera={**CAMERA, "sources": sources})
 
     def test_custom_sources_are_explicitly_uninspected(self):
-        report = self.check(camera={**CAMERA, "sources": ["videotestsrc"] * 4})
-        self.assertEqual(report["sources_requiring_manual_inspection"], [1, 2, 3, 4])
+        report = self.check(camera={**CAMERA, "sources": ["videotestsrc"] * 2})
+        self.assertEqual(report["sources_requiring_manual_inspection"], [1, 2])
 
     def test_check_cli_is_device_free_and_uses_component_validators(self):
         configs = {"camera": json.dumps(CAMERA), "reverse": json.dumps({**REVERSE, "reverse_gpio_pin": 22})}
@@ -109,6 +109,63 @@ class CombinedStateTests(unittest.TestCase):
         for port in (sensor, display):
             self.assertIn((1200, b"\nX\n"), port.writes)
             self.assertFalse(any(at >= 1200 and data.strip().startswith((b"R,", b"K,", b"D,")) for at, data in port.writes))
+
+    def test_camera_mapping_and_all_sensor_slots_survive_simultaneous_triggers(self):
+        """Exercise real state/packet logic with distinct distances and a failed slot."""
+        for left_camera, right_camera in ((1, 2), (2, 1)):
+            for third_distance in (914, -1):
+                with self.subTest(left=left_camera, third_distance=third_distance):
+                    config = selector.validate({**CAMERA, "trigger_left_camera": left_camera,
+                                                "trigger_right_camera": right_camera})
+                    clock = Clock(1700)
+                    state = selector.State(1, config)
+                    blinker = selector.BlinkerTrigger(config)
+                    sensor, display = Port(clock, True), Port(clock, False)
+                    observations = {}
+                    normal_wait, normal_read = clock.wait, sensor.read
+                    # Non-sorted distances expose sorting or accidental side-based remapping.
+                    expected = [1219, 305, third_distance, 610]
+
+                    def read(count):
+                        return normal_read(count).replace(
+                            b",305,0,610,0,914,0,1219,0\n",
+                            f",1219,0,305,0,{third_distance},0,610,0\n".encode())
+
+                    def update():
+                        left, right = ((True, False) if clock.ms < 400 else
+                                       (True, True) if clock.ms < 800 else
+                                       (False, True) if clock.ms < 1100 else (False, False))
+                        state.trigger(blinker.update(left, right, clock.now()))
+                        observations[clock.ms] = state.snapshot()["selected_camera"]
+
+                    def wait(seconds):
+                        done = normal_wait(seconds)
+                        update()
+                        return done
+
+                    sensor.read, clock.wait = read, wait
+                    update()
+                    reverse.pump(sensor, display, ARGS, REVERSE, clock,
+                                 reverse.ReverseGate(0.1), lambda: clock.ms < 1200,
+                                 clock.now, new_token=lambda: 42)
+                    for at, camera in ((300, left_camera), (600, None),
+                                       (1000, right_camera), (1300, right_camera)):
+                        self.assertEqual(observations[at], camera)
+                        pipeline = selector.command(config, observations[at])
+                        if camera is None:
+                            self.assertNotIn("v4l2src", pipeline)
+                        else:
+                            self.assertIn(f"device=/dev/video{(camera - 1) * 2}", pipeline)
+                    packets = [(at, list(map(int, data.strip().split(b",")[2:])))
+                               for at, data in display.writes if data.startswith(b"D,")]
+                    # Allow initial blank output while the independent display acquires.
+                    for start, end in ((200, 400), (500, 800), (900, 1100)):
+                        values = [slots for at, slots in packets if start <= at < end]
+                        self.assertTrue(values)
+                        self.assertTrue(all(slots == expected for slots in values), values)
+                    for port in (sensor, display):
+                        self.assertIn((1200, b"\nX\n"), port.writes)
+                    self.assertFalse(any(at >= 1200 for at, _ in packets))
 
     def test_blocked_camera_launch_does_not_delay_reverse_low_release(self):
         state = selector.State(1, CAMERA)
@@ -268,7 +325,7 @@ class ResourceFailureTests(SimulatedDeviceIdentities, unittest.TestCase):
                 def read(*_args):
                     if cancel_at == "read":
                         stop.set()
-                    return b'{"camera":2}\n{"camera":3}\n'
+                    return b'{"camera":2}\n{"camera":1}\n'
 
                 def write(reply):
                     stop.set()

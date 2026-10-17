@@ -23,36 +23,42 @@ CONFIG = json.loads(Path(__file__).with_name("config.json").read_text())
 
 class ControlTests(unittest.TestCase):
     def setUp(self):
-        self.state = selector.State(3)
+        self.state = selector.State(2)
 
     def test_each_camera_input(self):
-        for camera in range(1, 5):
-            values = [int(i == camera) for i in range(1, 5)]
-            self.assertEqual(selector.resolve_inputs(values, 3), camera)
+        for camera in range(1, 3):
+            values = [int(i == camera) for i in range(1, 3)]
+            self.assertEqual(selector.resolve_inputs(values, 2), camera)
 
     def test_priority_and_hold(self):
-        self.assertEqual(selector.resolve_inputs([0, 0, 0, 0], 3), 3)
-        self.assertEqual(selector.resolve_inputs([0, 1, 1, 1], 3), 2)
+        self.assertEqual(selector.resolve_inputs([0, 0], 2), 2)
+        self.assertEqual(selector.resolve_inputs([1, 1], 2), 1)
 
     def test_bad_inputs_do_not_change_state(self):
-        for values in ([1, 2, 0, 0], [1, 0], None, "0001", [1.0, 0, 0, 0]):
+        for values in ([1, 2], [1, 0, 0, 0], None, "01", [1.0, 0]):
             with self.assertRaises(ValueError):
                 self.state.inputs(values)
-            self.assertEqual(self.state.selected, 3)
+            self.assertEqual(self.state.selected, 2)
 
     def test_commands_and_arbitration(self):
-        self.assertTrue(selector.apply_message(self.state, '{"camera":4}')["ok"])
-        self.state.inputs([0, 1, 0, 0])
+        self.assertTrue(selector.apply_message(self.state, '{"camera":1}')["ok"])
+        self.state.inputs([0, 1])
         self.assertEqual(self.state.selected, 2)
         self.assertTrue(selector.apply_message(self.state, '{"camera":1}')["ok"])
         self.assertEqual(self.state.selected, 1)
 
     def test_bad_commands_do_not_change_selection(self):
         for line in ('{"camera":true}', '{"camera":0}', '{"camera":5}', '[]',
-                     '{"status":1}', '{}', '{"camera":2,"inputs":[1,0,0,0]}',
-                     '{', b'\xff', '{"inputs":[0,-1,0,0]}'):
+                     '{"status":1}', '{}', '{"camera":2,"inputs":[1,0]}',
+                     '{', b'\xff', '{"inputs":[0,-1]}'):
             self.assertFalse(selector.apply_message(self.state, line)["ok"])
-            self.assertEqual(self.state.selected, 3)
+            self.assertEqual(self.state.selected, 2)
+
+    def test_nonexistent_cameras_are_rejected_without_changing_selection(self):
+        for camera in (3, 4):
+            reply = selector.apply_message(self.state, json.dumps({"camera": camera}))
+            self.assertFalse(reply["ok"])
+            self.assertEqual(self.state.selected, 2)
 
     def test_status_is_acceptance_not_frame_health(self):
         result = selector.apply_message(self.state, '{"status":true}')
@@ -63,37 +69,48 @@ class ControlTests(unittest.TestCase):
         lines = selector.Lines()
         self.assertEqual(list(selector.responses(self.state, lines, b'{"cam')), [])
         replies = list(selector.responses(self.state, lines,
-                       b'era":4}\r\n{"inputs":[0,1,0,0]}\n'))
+                       b'era":1}\r\n{"inputs":[0,1]}\n'))
         self.assertEqual(len(replies), 2)
-        self.assertEqual(json.loads(replies[0])["selected_camera"], 4)
+        self.assertEqual(json.loads(replies[0])["selected_camera"], 1)
         self.assertEqual(self.state.selected, 2)
 
     def test_oversized_line_discards_its_entire_suffix(self):
         lines = selector.Lines()
         self.assertEqual(lines.feed(b'x' * 2000), [])
         replies = list(selector.responses(self.state, lines,
-                       b'{"camera":1}\n{"camera":4}\n'))
+                       b'{"camera":2}\n{"camera":1}\n'))
         self.assertFalse(json.loads(replies[0])["ok"])
-        self.assertEqual(self.state.selected, 4)
+        self.assertEqual(self.state.selected, 1)
         self.assertLessEqual(len(lines.buffer), 1024)
 
     def test_command_generator(self):
         result = subprocess.run([sys.executable, str(Path(__file__).with_name("control.py")),
-                                 "--inputs", "0", "0", "1", "0"],
+                                 "--inputs", "0", "1"],
                                 capture_output=True, text=True, check=True)
-        self.assertEqual(json.loads(result.stdout), {"inputs": [0, 0, 1, 0]})
+        self.assertEqual(json.loads(result.stdout), {"inputs": [0, 1]})
 
 
 class ConfigTests(unittest.TestCase):
     def test_default_config_is_local_and_live_only(self):
         selector.validate(CONFIG)
-        for camera in range(1, 5):
+        for camera in range(1, 3):
             args = selector.command(CONFIG, camera)
             self.assertIn("v4l2src", args)
             self.assertIn("kmssink", args)
             self.assertIn("watchdog", args)
             self.assertFalse(any("rtsp" in arg or "filesink" in arg for arg in args))
             self.assertIn("video/x-raw,width=1280,height=720,pixel-aspect-ratio=1/1,framerate=60/1", args)
+
+    def test_exactly_two_sources_and_two_manual_inputs_are_required(self):
+        for count in (0, 1, 3, 4):
+            with self.subTest(count=count), self.assertRaisesRegex(ValueError, "exactly two"):
+                selector.validate({**CONFIG, "sources": [CONFIG["sources"][0]] * count})
+        with self.assertRaises(ValueError):
+            selector.validate({**CONFIG, "gpio_pins": [17, 27, 22, 23]})
+        for field in ("initial_camera", "trigger_left_camera", "trigger_right_camera"):
+            for camera in (3, 4):
+                with self.subTest(field=field, camera=camera), self.assertRaises(ValueError):
+                    selector.validate({**CONFIG, field: camera})
 
     def test_demo_requires_no_capture_devices(self):
         args = selector.command(CONFIG, 2, demo=True, headless=True)
@@ -104,8 +121,8 @@ class ConfigTests(unittest.TestCase):
 
     def test_invalid_config(self):
         for field, value in (("initial_camera", True), ("sources", []),
-                             ("gpio_pins", None), ("gpio_pins", [17, 17, 22, 23]),
-                             ("gpio_pins", [17, 27, 22, 99]), ("gpio_active_low", 1),
+                             ("gpio_pins", None), ("gpio_pins", [17, 17]),
+                             ("gpio_pins", [17, 99]), ("gpio_active_low", 1),
                              ("serial_baud", -1), ("serial_port", ""),
                              ("serial_port", "/dev/ttyUSB0\0"), ("sink", ""),
                              ("sink", "kmssink\0")):
@@ -156,7 +173,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_check_config_reports_effective_settings_without_device_dependencies(self):
         config = {"initial_camera": 1, "sources": CONFIG["sources"],
-                  "gpio_pins": [17, 27, 22, 23], "serial_port": "/dev/ttyUSB0"}
+                  "gpio_pins": [17, 27], "serial_port": "/dev/ttyUSB0"}
         with patch.object(Path, "read_text", return_value=json.dumps(config)), \
              patch.object(selector.shutil, "which", side_effect=AssertionError("dependency check")), \
              patch.object(selector.subprocess, "Popen", side_effect=AssertionError("process start")), \
@@ -166,8 +183,8 @@ class ConfigTests(unittest.TestCase):
         report = json.loads(output.getvalue())
         self.assertEqual(report["config"]["output_fps"], 60)
         self.assertEqual(report["config"]["serial_port"], "/dev/ttyUSB0")
-        self.assertEqual(len(report["pipelines"]), 4)
-        self.assertIn("device=/dev/video6", report["pipelines"][3])
+        self.assertEqual(len(report["pipelines"]), 2)
+        self.assertIn("device=/dev/video2", report["pipelines"][1])
 
     def test_demo_headless_check_still_rejects_original_bad_pipelines(self):
         for field in ("sources", "sink"):
@@ -227,11 +244,11 @@ class PlaybackTests(unittest.TestCase):
     def test_switch_stops_old_capture_and_cleanup_stops_new(self):
         state = selector.State(1)
         first, second = FakeProcess(), FakeProcess()
-        stop = FakeStop(lambda tick: state.select(4) if tick == 1 else None)
+        stop = FakeStop(lambda tick: state.select(2) if tick == 1 else None)
         with patch.object(selector.subprocess, "Popen", side_effect=[first, second]) as start:
             selector.player(state, CONFIG, stop)
         self.assertEqual(start.call_count, 2)
-        self.assertIn("device=/dev/video6", start.call_args_list[1].args[0])
+        self.assertIn("device=/dev/video2", start.call_args_list[1].args[0])
         for call in start.call_args_list:
             self.assertEqual(call.kwargs["stdin"], subprocess.DEVNULL)
             self.assertEqual(call.kwargs["stdout"], subprocess.DEVNULL)
@@ -288,22 +305,22 @@ class PlaybackTests(unittest.TestCase):
 
     def test_gpio_debounce_and_release_hold(self):
         state = selector.State(1)
-        buttons = [type("Button", (), {"is_pressed": False})() for _ in range(4)]
+        buttons = [type("Button", (), {"is_pressed": False})() for _ in range(2)]
         def tick(count):
-            buttons[2].is_pressed = 2 <= count < 12
+            buttons[1].is_pressed = 2 <= count < 12
         stop = FakeStop(tick, limit=20)
         with patch.object(selector.time, "monotonic", side_effect=lambda: stop.ticks * 0.01):
             selector.poll_gpio(state, buttons, stop)
-        self.assertEqual(state.selected, 3)
+        self.assertEqual(state.selected, 2)
 
     def test_custom_gpio_timing_rejects_short_pulse_and_accepts_stable_input(self):
         state = selector.State(1)
-        buttons = [type("Button", (), {"is_pressed": False})() for _ in range(4)]
+        buttons = [type("Button", (), {"is_pressed": False})() for _ in range(2)]
         selections = []
         intervals = []
         def tick(count):
             selections.append(state.selected)
-            buttons[2].is_pressed = 2 <= count < 4 or 7 <= count
+            buttons[1].is_pressed = 2 <= count < 4 or 7 <= count
         stop = FakeStop(tick, limit=16)
         original_wait = stop.wait
         def wait(seconds):
@@ -314,7 +331,7 @@ class PlaybackTests(unittest.TestCase):
             selector.poll_gpio(state, buttons, stop,
                                {"gpio_sample_seconds": 0.02, "gpio_debounce_seconds": 0.06})
         self.assertEqual(selections[:7], [1] * 7)
-        self.assertEqual(state.selected, 3)
+        self.assertEqual(state.selected, 2)
         self.assertTrue(all(value == 0.02 for value in intervals))
 
 
@@ -335,7 +352,7 @@ class SerialTests(unittest.TestCase):
                     def read(self, _size):
                         if cancel_at == "read":
                             stop.set()
-                        return b'{"camera":2}\n{"camera":3}\n'
+                        return b'{"camera":2}\n{"camera":1}\n'
 
                     def write(self, reply):
                         writes.append(reply)
@@ -365,7 +382,7 @@ class SerialTests(unittest.TestCase):
         second.__exit__ = Mock(return_value=False)
         first.read.side_effect = [b'{"camera":', OSError("unplugged")]
         # A suffix from the previous connection cannot complete its old command.
-        second.read.return_value = b'2}\n{"camera":3}\n'
+        second.read.return_value = b'2}\n{"camera":2}\n'
         second.write.return_value = 0
         module = types.SimpleNamespace(Serial=Mock(side_effect=[first, second]), SerialException=OSError)
         waits = []
@@ -405,7 +422,7 @@ class SerialTests(unittest.TestCase):
                 return False
 
             def read(self, size):
-                return b'{"inputs":[0,0,0,1]}\n'
+                return b'{"inputs":[0,1]}\n'
 
             def write(self, reply):
                 writes.append(json.loads(reply))
@@ -421,9 +438,9 @@ class SerialTests(unittest.TestCase):
         with patch.dict(sys.modules, {"serial": module}):
             selector.serial_control(state, {"serial_port": "/dev/ttyUSB0"}, stop)
         self.assertEqual(constructor.call_count, 2)
-        self.assertEqual(state.selected, 4)
+        self.assertEqual(state.selected, 2)
         self.assertTrue(writes[0]["ok"])
-        self.assertEqual(writes[0]["selected_camera"], 4)
+        self.assertEqual(writes[0]["selected_camera"], 2)
 
     def test_custom_serial_timeouts_and_reconnect_delay(self):
         from unittest.mock import Mock
