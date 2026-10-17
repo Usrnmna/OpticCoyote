@@ -1,5 +1,7 @@
 # Controller, chip, and module pinouts
 
+[Documentation index](index.md) | [Project overview](../README.md)
+
 Use this reference with the [project wiring scheme](project-wiring.md).
 **Board header labels, Raspberry Pi BCM numbers, physical header positions, and
 chip package pin numbers are different numbering systems.** Each diagram states
@@ -71,8 +73,8 @@ for the CH340 board's schematic.
 
 Leave D0/D1 free of external drivers while using USB serial. D8 needs an
 appropriate external driver if used for a load; the project does not specify a
-siren/relay circuit. The optional camera draft uses D4-D7 instead of leaving
-them unused. See [its separate scheme](project-wiring.md#optional-gpio-camera-warning-draft).
+siren/relay circuit. The retired camera-warning draft used D4-D7; it is outside the supported
+installation. See the [historical reference](../draft-gpio-link/README.md).
 
 ### ATmega328P signal-to-chip reference
 
@@ -239,38 +241,27 @@ control additionally uses one manually assigned, protected GPIO input; see the
 requires no GPIO connection. The camera path uses USB capture and HDMI output.
 Match physical port locations to the Pi 5 board markings.
 
-The optional GPIO draft uses the following portion of the standard 40-pin
-header. Numbers in parentheses are **physical pin positions**; GPIO names are
-**BCM numbers**. Orient by the board's pin-1 marking, not this page's position
-relative to the Pi's USB connectors. Unshown pins are not needed by the draft.
-Reference: [Raspberry Pi GPIO documentation](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#gpio-and-the-40-pin-header).
+The supported installation uses these protected trigger inputs. BCM numbers
+identify GPIO signals; physical numbers identify header positions.
 
-```text
-       Odd-numbered side          Even-numbered side
-         3V3     (1)  o     o  (2)  5V       [do not use for GPIO pull-ups]
-         GPIO2   (3)  o     o  (4)  5V       [do not use for GPIO pull-ups]
-         GPIO3   (5)  o     o  (6)  GND      <-- common ground
-         GPIO4   (7)  o     o  (8)  GPIO14
-         GND     (9)  o     o (10)  GPIO15
-camera 1 GPIO17  (11)  o     o (12)  GPIO18
-camera 2 GPIO27  (13)  o     o (14)  GND
-camera 3 GPIO22  (15)  o     o (16)  GPIO23   <-- camera 4
-         3V3    (17)  o     o (18)  GPIO24
-               ... remaining pins omitted ...
-```
+| Function | BCM GPIO | Physical header pin |
+| --- | --- | --- |
+| Left blinker | 17 by default | 11 |
+| Right blinker | 27 by default | 13 |
+| Reverse | Unassigned; 22 is an example only | 15 if BCM22 is selected |
+| Ground | GND | 6, for example |
 
-The GPIO inputs are 3.3 V signals. Use the
-[four-transistor level interface](project-wiring.md#optional-gpio-camera-warning-draft)
-for the draft's 5 V Arduino outputs. GPIO2/GPIO3 shown above are **not** used to
-connect the project's OLED or sensor mux; both I2C buses belong to the Nanos.
+Pi inputs require protected 3.3 V logic. The [trigger wiring reference](project-wiring.md#optional-blinker-trigger-inputs)
+describes input conditioning. Pi GPIO2/GPIO3 are not connected to the sensor
+multiplexer or OLED; each Nano owns its respective I2C bus.
 
 ## Optional transistor and unspecified connectors
 
 | Part/interface | Pin naming to use | Detail still dependent on selected hardware |
 | --- | --- | --- |
-| NPN transistor in GPIO draft | B = base, C = collector, E = emitter | Numbered lead order; check actual manufacturer/package |
-| GreenYi AHD camera output, [ASIN B0C3R5Y7K1](https://www.amazon.com/GreenYi-Reverse-Trailer-Adjustable-Fisheye/dp/B0C3R5Y7K1) | Video signal and return/shield | Actual revision, harness connector, power pins and voltage; see [camera identity](../README.md#greenyi-camera-identity) |
-| GRACETOP AHD capture input, GTDE-ABV2USBC / GTUS-AHD2USB | Advertised four-pin 5 V output, GND, video input, audio input | Actual lead order/orientation, supply capacity, and supported modes require verification; see [adapter reference](../README.md#gracetop-adapter-identity-and-advertised-specifications) |
+| NPN transistor in retired GPIO draft | B = base, C = collector, E = emitter | Numbered lead order; check actual manufacturer/package |
+| GreenYi AHD camera output, [ASIN B0C3R5Y7K1](https://www.amazon.com/GreenYi-Reverse-Trailer-Adjustable-Fisheye/dp/B0C3R5Y7K1) | Video signal and return/shield | Actual revision, harness connector, power pins and voltage; see [camera identity](camera-setup.md#greenyi-camera-identity) |
+| GRACETOP AHD capture input, GTDE-ABV2USBC / GTUS-AHD2USB | Advertised four-pin 5 V output, GND, video input, audio input | Actual lead order/orientation, supply capacity, and supported modes require verification; see [adapter reference](camera-setup.md#gracetop-adapter-identity-and-advertised-specifications) |
 | USB | Complete data cable and board connector | Connector variant; do not hand-wire by wire color |
 | HDMI | Complete compatible cable | Pi-side connector size and chosen output |
 

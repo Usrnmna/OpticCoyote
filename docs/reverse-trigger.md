@@ -1,5 +1,7 @@
 # Reverse-triggered ranging and OLED ownership
 
+[Documentation index](index.md) | [Project overview](../README.md)
+
 The Raspberry Pi 5 with 4 GB RAM reads one protected reverse-light input and
 controls the existing sensor Nano and OLED Nano through their separate USB
 ports. Both supplied Nano builds default to reverse control: sensors boot idle,
@@ -46,7 +48,7 @@ isolation, and actual electrical operation require bench validation.
 
 The configuration deliberately leaves the BCM pin unassigned. Select an unused
 pin and check its physical header position. Avoid conflicts with the blinker
-defaults GPIO17/27, the optional camera draft GPIO17/27/22/23, or any other active
+defaults GPIO17/27, the retired camera draft GPIO17/27/22/23, or any other active
 peripheral. `reverse_active_high: true` uses a pull-down and HIGH activation;
 `false` supports an inverting interface with a pull-up and LOW activation.
 An open input must resolve to the inactive state in the completed interface.
@@ -109,7 +111,10 @@ python3 rpi-oled-bridge/bridge.py \
 `--check-config` needs no GPIO/USB dependencies and permits a null pin for
 inspection. Actual operation requires an assigned pin. The JSON is loaded at
 startup; restart the bridge after editing. `reverse.local.json` is ignored by
-Git. `--sensor-order` remains supported; default order is `1 2 3 4`.
+Git. `--sensor-order` remains supported as a display-only override; default
+order is `1 2 3 4`. It does not change firmware zone identities or persist into
+the installed service. Correct physical cable assignments in `kMuxChannels`;
+see [sensor identity guidance](oled-display.md#preserve-physical-sensor-identities).
 
 | JSON setting | Default | Purpose |
 | --- | --- | --- |
@@ -202,7 +207,13 @@ The latched GPIO generation and shutdown flag are checked again after packet
 formatting, so cancellation during formatting discards the unsent packet.
 Old-token data is discarded. Sensor failures mark that sensor unavailable;
 unrelated working sensors cannot keep its old number fresh. Missing readings
-are represented as `-1`, displayed as `--.-`, never as a fabricated zero.
+are represented as `-1`, displayed as `-.-`, never as a fabricated zero.
+The [OLED layout](oled-display.md#fixed-pixel-layout) uses fixed 9×16 glyphs;
+valid rounded distances above 9.9 feet display as `≥10`. Formatting does not
+change the raw measurements, alarm thresholds, or lease/freshness deadlines.
+The display rechecks data freshness after drawing and replaces expired numeric
+frames with `-.-` before transfer. Ownership expiry still takes priority and
+selects idle; see the [OLED source review](oled-display.md#oled-source-review).
 In reverse mode, a recovery after `kStaleMs` without a successful reading also
 clears the expired median-filter history before updating the alarm. A fresh
 clear reading cannot reassert an alarm from pre-failure values. Standalone mode

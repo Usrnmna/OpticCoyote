@@ -35,6 +35,12 @@ build/
 .build/
 # Debian packages, isolated APT caches, offline bundles, and build manifests.
 /dist/
+# Alternate repository-root output from --output-dir . packaging runs.
+/apt-work-*/
+/project-optic-coyote_*_all.deb
+/project-optic-coyote_*_all.deb.sha256
+/project-optic-coyote_*_all.json
+/project-optic-coyote_*_trixie_arm64_offline*
 *.ino.hex
 *.ino.with_bootloader.hex
 *.ino.elf
@@ -47,6 +53,12 @@ build/
 *.a
 *.d
 *.map
+*.su
+
+# Compiler-generated coverage data; retain authored test fixtures.
+*.gcda
+*.gcno
+*.gcov
 
 # Executables produced by the documented Nano host checks.
 optic-coyote-*-test

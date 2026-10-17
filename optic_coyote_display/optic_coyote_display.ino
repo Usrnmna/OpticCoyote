@@ -2,6 +2,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include "display_protocol.h"
+#include "distance_glyphs.h"
 #include "reverse_protocol.h"
 
 /*
@@ -112,18 +113,24 @@ bool renderIdle(uint32_t now) {
   return true;
 }
 
-// Four fixed 32-pixel columns. The default font is 6 pixels wide; even "98.4"
-// fits with margins. Doubling height makes values 16 pixels tall without
-// reducing the four-value layout. Missing/stale input is visibly unavailable.
-bool renderReverseDistance(uint32_t now, char (&values)[4][5]) {
+// Use the same freshness deadline when drawing and immediately before transfer.
+// Unsigned elapsed arithmetic preserves the deadline across millis rollover.
+bool distancePacketFresh(uint32_t now) {
   const bool packetAvailable = ReverseConfig::kEnabled
       ? reverseReceiver.havePacket : havePacket;
   const uint32_t packetMs = ReverseConfig::kEnabled
       ? reverseReceiver.lastPacketMs : lastPacketMs;
+  return packetAvailable &&
+      static_cast<uint32_t>(now - packetMs) < Config::kLinkTimeoutMs;
+}
+
+// Four fixed 32-pixel columns preserve bumper order. Custom 9x16 digits and
+// the cap symbol fit between the small labels and shared footer; a narrow dot
+// keeps decimal and unavailable fields compact. Missing/stale data uses -.-.
+bool renderReverseDistance(uint32_t now, char (&values)[4][5]) {
   const int32_t *distances = ReverseConfig::kEnabled
       ? reverseReceiver.distances : receiver.distances;
-  const bool fresh = packetAvailable &&
-      static_cast<uint32_t>(now - packetMs) < Config::kLinkTimeoutMs;
+  const bool fresh = distancePacketFresh(now);
   for (uint8_t sensor = 0; sensor < 4; ++sensor)
     DisplayProtocol::formatFeet(fresh ? distances[sensor] : -1,
                                 values[sensor]);
@@ -138,13 +145,11 @@ bool renderReverseDistance(uint32_t now, char (&values)[4][5]) {
     oled.setTextSize(1);
     oled.setCursor(left + 13, 0);
     oled.print(sensor + 1);
-    oled.setTextSize(1, 2);
-    oled.setCursor(left + 4, 11);
-    oled.print(values[sensor]);
+    DistanceGlyphs::drawValue(oled, left, values[sensor]);
   }
   oled.setTextSize(1);
   oled.setCursor(58, 25);
-  // Values occupy y=11..24 (seven glyph rows doubled); unit fits y=25..31.
+  // Values occupy y=8..23; row 24 separates them from the unit at y=25..31.
   oled.print(F("ft"));
   return true;
 }
@@ -173,11 +178,21 @@ void refreshOled() {
   }
   DisplayMode mode = !ReverseConfig::kEnabled || reverseReceiver.active
       ? DisplayMode::ReverseDistance : DisplayMode::Idle;
+  const bool freshAtRender = distancePacketFresh(now);
   char values[4][5];
   const bool changed = mode == DisplayMode::Idle ? renderIdle(now)
       : renderReverseDistance(now, values);
   if (!changed) return;
   now = millis();
+  if (mode == DisplayMode::ReverseDistance && freshAtRender &&
+      !distancePacketFresh(now)) {
+    // Replace data that expired during drawing before it reaches the OLED.
+    // Invalidate the cache even if the previous screen already showed -.-;
+    // the current framebuffer contains the numeric view drawn above.
+    paintedMode = DisplayMode::Unpainted;
+    renderReverseDistance(now, values);
+    now = millis();
+  }
   reverseReceiver.expire(now);
   if (mode == DisplayMode::ReverseDistance && ReverseConfig::kEnabled &&
       !reverseReceiver.active) {

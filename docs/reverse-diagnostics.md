@@ -1,5 +1,7 @@
 # Pi-side reverse-trigger diagnostics
 
+[Documentation index](index.md) | [Project overview](../README.md)
+
 [`diagnose_reverse.py`](../rpi-oled-bridge/diagnose_reverse.py) checks the reverse
 control path for the **Raspberry Pi 5 with 4 GB RAM**. The report records this
 project target; it does not detect the Pi model or installed RAM. Markdown and
@@ -63,7 +65,10 @@ python3 rpi-oled-bridge/diagnose_reverse.py --hardware \
   --display-port /dev/serial/by-path/YOUR_DISPLAY_NANO
 ```
 
-The diagnostic retains physical sensor order 1–4. All HIGH/LOW descriptions
+The diagnostic retains firmware packet slot order 1–4, without a display
+permutation. Those slots represent physical sensors only after the wiring and
+`kMuxChannels` mapping have been verified. See
+[sensor identity guidance](oled-display.md#preserve-physical-sensor-identities). All HIGH/LOW descriptions
 below refer to normalized activity, as specified by `reverse_active_high`.
 
 1. Start with the input LOW and keep it LOW through USB boot. Initial HIGH
@@ -71,16 +76,16 @@ below refer to normalized activity, as specified by `reverse_active_high`.
    READY is printed only after the sensor and independently opened OLED have
    completed their boot intervals. Raising the input before READY aborts the
    cycle. Startup can therefore require approximately two `boot_ms` intervals.
-2. Wait for the `READY` prompt. Apply a HIGH pulse shorter than the configured
+2. Wait for the `READY` indication. Apply a HIGH pulse shorter than the configured
    qualification interval, then return to LOW. A controlled pulse source is
    preferable to a hand-operated switch; the pulse must overlap GPIO sampling
    to be observed. An unobserved pulse remains `NOT_TESTED`.
 3. Apply sustained HIGH. Keep it HIGH until the script reports valid sensor
    snapshots, fresh display-controller acknowledgements, and fresh values from
    all four sensor slots in one snapshot, plus a validated four-value distance
-   write, then prompts for LOW. Values are checked again for expiration before
-   prompting. Place suitable targets within
-   the sensors' supported range. Missing sensor values cannot pass the four-slot
+   write, then indicates that LOW is required. Values are checked again for
+   expiration before that indication. Place suitable targets within the sensors'
+   supported range. Missing sensor values cannot pass the four-slot
    check merely because USB telemetry continues. Successful slots from separate
    snapshots cannot be accumulated into a four-slot PASS.
 4. Return to LOW and keep it LOW through the settling and quiet-observation
@@ -204,13 +209,13 @@ Cleanup time cannot complete an observation window that already expired.
   controller ACKs establish protocol handling. Successful D/X writes establish
   host serial acceptance, not board execution or visible output. Quiet telemetry
   establishes observed USB silence, not acoustic cessation.
-- **Physical behavior NOT_TESTED:** visible feet values and `--.-` stale markers,
+- **Physical behavior NOT_TESTED:** visible feet values and `-.-` stale markers,
   return to idle rendering, physical sensor-column order, distance accuracy,
   actual ranging cessation, electrical protection, physical pulse timing, USB
   reconnect/reset recovery, and disconnected-sensor behavior require separate
   bench measurements. Camera capture, decoding, distinct exposure rate, HDMI,
   and switching are also untested by this script; use the separate
-  [adapter diagnostic and camera procedures](../README.md#pi-side-adapter-diagnostic)
+  [adapter diagnostic and camera procedures](camera-diagnostics.md#pi-side-adapter-diagnostic)
   when equipment is available. The script does not collect operator attestations or
   promote these entries to PASS.
 

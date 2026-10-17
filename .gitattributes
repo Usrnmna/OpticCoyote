@@ -1,0 +1,20 @@
+# Keep text portable between Windows editing and Linux/Pi execution.
+# Automatic text detection preserves binary files; no encoding conversion is applied.
+* text=auto eol=lf
+
+# Linux maintainer scripts have no filename extension.
+/packaging/postinst text eol=lf
+/packaging/prerm text eol=lf
+/packaging/postrm text eol=lf
+
+# Binary documentation assets and distribution archives must remain byte-exact.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.deb binary
+*.gz binary
+*.zip binary
+*.elf binary
+*.bin binary

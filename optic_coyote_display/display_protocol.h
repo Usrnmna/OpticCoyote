@@ -5,23 +5,36 @@
 #include <string.h>
 
 // The Pi sends millimetres so rounding happens once, at the display. Keep the
-// limit in sync with rpi-oled-bridge/bridge.py. 30000 mm fits in four characters
-// as 98.4 feet. -1 is unavailable; zero is a real numeric value, never a fault.
+// limit in sync with rpi-oled-bridge/bridge.py. The display cap does not change
+// accepted measurements. -1 is unavailable; zero is a real value, never a fault.
 namespace DisplayProtocol {
 constexpr uint8_t kSensorCount = 4;
 constexpr int32_t kMaximumDistanceMm = 30000;
 constexpr uint8_t kLineCapacity = 32;
 
-// Format a four-character field (plus NUL) without AVR floating-point printf.
+// Private render token for the dedicated greater-than-or-equal bitmap. It is
+// never sent over USB or printed through the default font as an ASCII '>'.
+constexpr char kAtLeastGlyph = '>';
+
+// Format three glyphs without AVR floating-point printf. The spare buffer byte
+// is zeroed so full-buffer comparisons remain deterministic for cached views.
 // One foot is exactly 304.8 mm; adding half the divisor rounds to 0.1 foot.
 inline void formatFeet(int32_t millimetres, char (&text)[5]) {
+  memset(text, 0, sizeof(text));
   if (millimetres < 0 || millimetres > kMaximumDistanceMm) {
-    memcpy(text, "--.-", 5);
+    memcpy(text, "-.-", 3);
     return;
   }
   const uint16_t tenths = (millimetres * 100L + 1524L) / 3048L;
-  snprintf(text, sizeof(text), "%2u.%u", static_cast<unsigned>(tenths / 10),
-           static_cast<unsigned>(tenths % 10));
+  if (tenths >= 100) {
+    text[0] = kAtLeastGlyph;
+    text[1] = '1';
+    text[2] = '0';
+  } else {
+    text[0] = '0' + tenths / 10;
+    text[1] = '.';
+    text[2] = '0' + tenths % 10;
+  }
 }
 
 // Bounded, allocation-free receiver. Only a complete D,a,b,c,d line commits

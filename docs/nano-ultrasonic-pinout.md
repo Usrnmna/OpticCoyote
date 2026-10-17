@@ -1,5 +1,7 @@
 # Nano four-sensor pinout and interface reference
 
+[Documentation index](index.md) | [Project overview](../README.md)
+
 For the complete assembly, see the [project wiring scheme](project-wiring.md)
 and [controller/module pinouts](component-pinouts.md). This reference
 covers the sensor Nano, mux, and sensor interface in detail.
@@ -11,7 +13,7 @@ Applies to the **ATmega328P Nano with a CH340 USB serial bridge**, four
 [`optic_coyote_ultrasonic.ino`](../optic_coyote_ultrasonic/optic_coyote_ultrasonic.ino).
 
 This is a signal-name wiring reference, not a manufacturer-certified datasheet
-or a verified PCB schematic. Match the printed labels on your actual boards;
+or a verified PCB schematic. Match the printed labels on the actual boards;
 the diagrams do not represent physical header order or viewing orientation.
 
 AJ-SR04M is interchangeable on any mux channel when the exact variant supports
@@ -30,8 +32,11 @@ The Pi forwards reverse snapshots or standalone CSV to a second Nano driving
 the SSD1306 display; see the [OLED setup guide](oled-display.md). The
 sensor wiring below is unchanged. In the rear-bumper installation, sensors
 1-4 are all on the rear bumper, ordered left to right on the OLED. The
-front/rear names below are legacy firmware labels, not physical placement
-requirements. The Pi bridge can remap the four column positions.
+positions are far left, left-middle, rear-middle, and far right respectively.
+All four face directly rearward. Correct cable order in `Config::kMuxChannels`
+or the wiring so firmware slots and labels match physical sensors 1-4. The
+Pi bridge can rearrange OLED values only; it does not rename firmware zones.
+See the [sensor identity guidance](oled-display.md#preserve-physical-sensor-identities).
 
 ## Signal wiring graph
 
@@ -60,10 +65,10 @@ EACH CHANNEL'S TWO SEPARATE WIRES:
   TCA9548A SCn ------------------> RCWL-1655 Trig / RX / SCL
   TCA9548A SDn <-----------------> RCWL-1655 Echo / TX / SDA
 
-  Sensor 1: channel 0, front_left,  fixed address 0x57
-  Sensor 2: channel 1, front_right, fixed address 0x57
-  Sensor 3: channel 2, rear_left,   fixed address 0x57
-  Sensor 4: channel 3, rear_right,  fixed address 0x57
+  Sensor 1: channel 0, rear_far_left,  fixed address 0x57
+  Sensor 2: channel 1, rear_left_middle, fixed address 0x57
+  Sensor 3: channel 2, rear_middle,   fixed address 0x57
+  Sensor 4: channel 3, rear_far_right,  fixed address 0x57
 
   Set R7 = 100 kOhm on EACH RCWL-1655 to select I2C mode.
   The firmware selects one mux channel at a time.
@@ -81,14 +86,14 @@ different USB bridge/connector from the specified CH340 board.
 | Nano A4 | TCA9548A upstream SDA | I2C data |
 | Nano A5 | TCA9548A upstream SCL | I2C clock, firmware default 100 kHz |
 | Nano GND | Mux GND and all sensor GND pins | Common signal reference |
-| Mux SC0 | Sensor 1 Trig/RX/SCL | Front-left clock |
-| Mux SD0 | Sensor 1 Echo/TX/SDA | Front-left data |
-| Mux SC1 | Sensor 2 Trig/RX/SCL | Front-right clock |
-| Mux SD1 | Sensor 2 Echo/TX/SDA | Front-right data |
-| Mux SC2 | Sensor 3 Trig/RX/SCL | Rear-left clock |
-| Mux SD2 | Sensor 3 Echo/TX/SDA | Rear-left data |
-| Mux SC3 | Sensor 4 Trig/RX/SCL | Rear-right clock |
-| Mux SD3 | Sensor 4 Echo/TX/SDA | Rear-right data |
+| Mux SC0 | Sensor 1 Trig/RX/SCL | Far-left rear clock |
+| Mux SD0 | Sensor 1 Echo/TX/SDA | Far-left rear data |
+| Mux SC1 | Sensor 2 Trig/RX/SCL | Left-middle rear clock |
+| Mux SD1 | Sensor 2 Echo/TX/SDA | Left-middle rear data |
+| Mux SC2 | Sensor 3 Trig/RX/SCL | Rear-middle clock |
+| Mux SD2 | Sensor 3 Echo/TX/SDA | Rear-middle data |
+| Mux SC3 | Sensor 4 Trig/RX/SCL | Far-right rear clock |
+| Mux SD3 | Sensor 4 Echo/TX/SDA | Far-right rear data |
 | Peripheral supply rail | Mux supply input and all sensor VCC pins | See power notes below |
 
 All four sensors have the same address. Keep each SDA/SCL pair on its assigned
@@ -186,8 +191,8 @@ The following START/STOP CSV reference applies only when
 ```text
 Host -> Nano: START\n
 Nano -> Host:
-time_ms,front_left_mm,front_right_mm,rear_left_mm,rear_right_mm,nearest_zone,nearest_mm,state
-1680,742,515,1204,980,front_right,515,WARNING
+time_ms,rear_far_left_mm,rear_left_middle_mm,rear_middle_mm,rear_far_right_mm,nearest_zone,nearest_mm,state
+1680,742,515,1204,980,rear_left_middle,515,WARNING
 
 Host -> Nano: STOP\n
 ```
@@ -219,16 +224,16 @@ With four responding sensors, packets arrive roughly every 100 ms plus overhead,
 
 ## Investigated alternative: direct trigger/echo GPIO
 
-Status: **proposal only**. The user authorized investigating an interface change; the implemented firmware and wiring above remain I2C. The RCWL-1655 datasheet describes GPIO trigger/echo mode as an alternative to I2C. Its publicly readable [datasheet mirror](https://www.scribd.com/document/901894038/RCWL-1655-Datasheet) has incomplete OCR; the linked original PDF could not be retrieved during investigation. Verify the exact module revision, GPIO mode resistor setting, trigger pulse specification, no-echo behavior, and minimum retrigger interval against a readable datasheet before conversion. No specific resistor modification is approved here.
+Status: **proposal only**. A direct trigger/echo interface remains an unimplemented proposal; the firmware and wiring above use I2C. The RCWL-1655 datasheet describes GPIO trigger/echo mode as an alternative to I2C. Its publicly readable [datasheet mirror](https://www.scribd.com/document/901894038/RCWL-1655-Datasheet) has incomplete OCR; the linked original PDF could not be retrieved during investigation. Verify the exact module revision, GPIO mode resistor setting, trigger pulse specification, no-echo behavior, and minimum retrigger interval against a readable datasheet before conversion. No resistor modification is specified for the implemented I2C configuration.
 
 A candidate Nano pin assignment would bypass the TCA9548A for sensor signals:
 
 | Zone | Nano trigger output | Nano echo input |
 | --- | --- | --- |
-| front_left | D9 | D2 / PCINT18 |
-| front_right | D10 | D3 / PCINT19 |
-| rear_left | D11 | D4 / PCINT20 |
-| rear_right | D12 | D5 / PCINT21 |
+| rear_far_left | D9 | D2 / PCINT18 |
+| rear_left_middle | D10 | D3 / PCINT19 |
+| rear_middle | D11 | D4 / PCINT20 |
+| rear_far_right | D12 | D5 / PCINT21 |
 
 The [Arduino Nano pinout](https://docs.arduino.cc/resources/pinouts/A000005-full-pinout.pdf) confirms those pin-change interrupt inputs. This assignment retains D0/D1 for USB serial, D8 for the alarm, and D13 for heartbeat. Each sensor would need its own direct trigger and echo wire to the Nano, suitable GPIO mode configuration, and the established supply/common ground.
 

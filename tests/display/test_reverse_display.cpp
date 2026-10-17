@@ -16,18 +16,7 @@ void send(const std::string &packet) {
   while (Serial.available()) loop();
 }
 
-void expectFields(const char *a, const char *b, const char *c, const char *d) {
-  const char *expected[] = {a, b, c, d};
-  assert(oled.drawing.size() == 9);
-  for (int sensor = 0; sensor < 4; ++sensor) {
-    const auto &label = oled.drawing[sensor * 2];
-    const auto &value = oled.drawing[sensor * 2 + 1];
-    assert(label.text == std::to_string(sensor + 1));
-    assert(value.x == sensor * 32 + 4 && value.y == 11);
-    assert(value.text == expected[sensor]);
-  }
-  assert(oled.drawing.back().text == "ft");
-}
+#include "layout_checks.h"
 
 void expectIdle() {
   assert(!reverseReceiver.active);
@@ -35,11 +24,13 @@ void expectIdle() {
   for (uint8_t i = 0; i < 4; ++i) assert(reverseReceiver.distances[i] == -1);
   advance(100);
   assert(oled.drawing.empty());
+  for (const auto pixel : oled.pixels) assert(pixel == 0);
   assert(oledReady);
   assert(paintedMode == DisplayMode::Idle);
 }
 
 int main() {
+  checkAllGlyphBounds();
   setup();
   expectIdle();
 
@@ -60,10 +51,10 @@ int main() {
   assert(reverseReceiver.active && reverseReceiver.token == 1);
   assert(Serial.output == "A,1,0\n");
   advance(100);
-  expectFields("--.-", "--.-", "--.-", "--.-");
+  expectFields("-.-", "-.-", "-.-", "-.-");
   send("D,1,305,610,914,1219\n");
   advance(100);
-  expectFields(" 1.0", " 2.0", " 3.0", " 4.0");
+  expectFields("1.0", "2.0", "3.0", "4.0");
 
   // A malformed fourth value cannot commit any values or refresh freshness.
   const uint32_t lastGood = reverseReceiver.lastPacketMs;
@@ -86,7 +77,7 @@ int main() {
   // X releases immediately in firmware; the next refresh clears prior values.
   send("R,2,1500\nD,2,305,610,914,1219\n");
   advance(100);
-  expectFields(" 1.0", " 2.0", " 3.0", " 4.0");
+  expectFields("1.0", "2.0", "3.0", "4.0");
   send("X\n");
   expectIdle();
   const unsigned blankTransfers = oled.transfers;
@@ -99,17 +90,17 @@ int main() {
   send("R,3,1500\nR,2,1500\nD,2,305,610,914,1219\n");
   assert(reverseReceiver.token == 3 && !reverseReceiver.havePacket);
   advance(100);
-  expectFields("--.-", "--.-", "--.-", "--.-");
+  expectFields("-.-", "-.-", "-.-", "-.-");
   send("D,3,305,610,914,1219\n");
   advance(100);
-  expectFields(" 1.0", " 2.0", " 3.0", " 4.0");
+  expectFields("1.0", "2.0", "3.0", "4.0");
   for (unsigned i = 0; i < 9; ++i) {
     advance(250);
     send("K,3," + std::to_string(i + 1) + "\n");
   }
   advance(100);
   assert(reverseReceiver.active && reverseReceiver.havePacket);
-  expectFields("--.-", "--.-", "--.-", "--.-");
+  expectFields("-.-", "-.-", "-.-", "-.-");
 
   // D maintains data freshness but cannot renew the ownership lease.
   send("X\nR,4,200\nD,4,0,0,0,0\n");
@@ -164,7 +155,7 @@ int main() {
   send("R,4294967295,1000\nD,4294967295,-1,0,5000,30000\n");
   assert(Serial.output == "A,4294967295,0\n");
   advance(100);
-  expectFields("--.-", " 0.0", "16.4", "98.4");
+  expectFields("-.-", "0.0", ">10", ">10");
   send("K,4294967295,4294967295\n");
   assert(Serial.output == "A,4294967295,0\nA,4294967295,4294967295\n");
   advance(999);
@@ -192,7 +183,7 @@ int main() {
   advance(100);
   assert(oled.transfers == priorSessionTransfers + 1);
   assert(paintedToken == 11);
-  expectFields(" 1.0", " 2.0", " 3.0", " 4.0");
+  expectFields("1.0", "2.0", "3.0", "4.0");
 
   // A command started before expiry but completed after it cannot renew.
   send("X\nR,12,200\n");
@@ -234,7 +225,16 @@ int main() {
   refreshOled();
   Wire.probeAdvanceMs = 0;
   assert(reverseReceiver.active);
-  expectFields("--.-", "--.-", "--.-", "--.-");
+  expectFields("-.-", "-.-", "-.-", "-.-");
+
+  // Fresh data restores mixed widths within the same lease after stale values.
+  send("D,15,3032,3033,0,-1\n");
+  advance(100);
+  expectFields("9.9", ">10", "0.0", "-.-");
+  send("D,15,30000,-1,3033,3032\n");
+  advance(100);
+  expectFields(">10", "-.-", ">10", "9.9");
+  assert(reverseReceiver.distances[0] == 30000);
 
   // Post-transfer probing also releases ownership; the next refresh clears.
   send("X\nR,16,200\nD,16,305,610,914,1219\n");
@@ -277,6 +277,32 @@ int main() {
   loop();
   assert(Serial.output == "A,18,2\n");
   send("X\n");
+  expectIdle();
+
+  // A fresh snapshot can become stale during drawing, even when the previous
+  // displayed view already consists of missing markers. Do not send old data.
+  send("R,19,10000\n");
+  advance(100);
+  expectFields("-.-", "-.-", "-.-", "-.-");
+  send("D,19,3032,3033,0,-1\n");
+  fakeNow += Config::kLinkTimeoutMs - 1;
+  lastRefreshMs = fakeNow - Config::kRefreshIntervalMs;
+  oled.nextDrawAdvanceMs = 1;
+  const auto staleTransfers = oled.transfers;
+  refreshOled();
+  assert(reverseReceiver.active);
+  assert(oled.transfers == staleTransfers + 1);
+  expectFields("-.-", "-.-", "-.-", "-.-");
+  assert(oled.transferredPixels == oled.pixels);
+
+  // Lease expiry while drawing takes priority over any distance frame.
+  send("X\nR,20,200\nD,20,3033,3033,3033,3033\n");
+  fakeNow += 199;
+  lastRefreshMs = fakeNow - Config::kRefreshIntervalMs;
+  oled.nextDrawAdvanceMs = 1;
+  refreshOled();
+  assert(!reverseReceiver.active);
+  for (const auto pixel : oled.transferredPixels) assert(pixel == 0);
   expectIdle();
 
   std::cout << "Reverse OLED ownership, stale data, lease, ACK and recovery checks passed\n";

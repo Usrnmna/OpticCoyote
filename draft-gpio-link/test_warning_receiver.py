@@ -71,7 +71,7 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), "0\n1\n4\n-1\n")
         self.assertIn("conflict", errors.getvalue())
 
-    def test_commands_work_with_unchanged_camera_selector(self):
+    def test_retired_camera_commands_cannot_select_nonexistent_cameras(self):
         """Use the real selector parser and state, without launching video."""
         path = Path(__file__).resolve().parents[1] / "rpi-ahd-selector" / "selector.py"
         spec = importlib.util.spec_from_file_location("existing_selector", path)
@@ -85,8 +85,8 @@ class ReceiverTests(unittest.TestCase):
         state = selector.State(1)
         for expected, line in enumerate(commands, 1):
             reply = selector.apply_message(state, line)
-            self.assertTrue(reply["ok"])
-            self.assertEqual(reply["selected_camera"], expected)
+            self.assertEqual(reply["ok"], expected <= 2)
+            self.assertEqual(state.selected, min(expected, 2))
 
     def test_bad_settings_rejected_before_gpio(self):
         cases = [["--pins", "17", "17", "22", "23"],

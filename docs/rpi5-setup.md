@@ -1,5 +1,7 @@
 # Raspberry Pi 5 operating system and setup
 
+[Documentation index](index.md) | [Project overview](../README.md)
+
 ## Recommended operating system
 
 **Raspberry Pi OS Lite (64-bit), Debian 13 Trixie**, is the recommended
@@ -123,7 +125,7 @@ Reboot after saving. The selector's default sink is
 `kmssink driver-name=vc4 force-modesetting=true sync=false`. Check the monitor's
 information screen for the actual resolution and refresh rate. For multiple
 displays, inspect connectors with `modetest -M vc4 -c` and follow the
-[camera installation guidance](../README.md#install-on-the-pi).
+[camera installation guidance](camera-setup.md#install-on-the-pi).
 
 ## 4. Configure and validate the components
 
@@ -138,9 +140,9 @@ python3 rpi-oled-bridge/bridge.py --list-ports
 
 Create the copy only on initial setup; preserve existing local settings during
 updates. Replace placeholder capture nodes with verified stable paths using
-the [capture configuration procedure](../README.md#configure-the-capture-devices).
+the [capture configuration procedure](camera-setup.md#configure-the-capture-devices).
 Configure blinker mappings and GPIO assignments using the
-[blinker setup](../README.md#blinker-trigger-mode) and check the local file:
+[blinker setup](camera-setup.md#blinker-trigger-mode) and check the local file:
 
 ```sh
 python3 rpi-ahd-selector/selector.py --config rpi-ahd-selector/config.local.json --check-config
@@ -155,7 +157,7 @@ Pi I2C does not need enabling for the USB-connected Nano sensor/OLED path.
 
 ## 5. Perform hardware acceptance checks
 
-1. Run the [adapter diagnostic and capture checks](../README.md#pi-side-adapter-diagnostic)
+1. Run the [adapter diagnostic and capture checks](camera-diagnostics.md#pi-side-adapter-diagnostic)
    for each actual camera/adapter and the intended hub configuration.
 2. Start the selector from the local console with the configured file:
    `python3 rpi-ahd-selector/selector.py --config rpi-ahd-selector/config.local.json`.

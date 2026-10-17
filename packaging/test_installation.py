@@ -33,6 +33,37 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual(cli.read_json(path)['reverse_gpio_pin'], 22)
         self.assertIsNone(cli.read_json(path.with_suffix('.json.bak'))['reverse_gpio_pin'])
 
+    def test_setup_prompts_for_only_left_and_right_capture_sources(self):
+        camera, reverse, sound, checker = cli.validators(self.config)
+        reverse['reverse_gpio_pin'] = 22
+        cli.save_json(self.config / 'reverse.json', reverse)
+        cli.save_json(self.config / 'devices.json',
+                      {'sensor_port': '/dev/sensor', 'display_port': '/dev/display'})
+        with patch('builtins.input', return_value='') as prompt, \
+                patch.object(cli, 'list_devices'), \
+                patch.object(checker, 'check_assignments',
+                             return_value={'result': 'NO_CONFLICTS_IN_INSPECTED_ASSIGNMENTS'}):
+            cli.configure(self.config)
+        source_prompts = [call.args[0] for call in prompt.call_args_list
+                          if 'GStreamer source' in call.args[0]]
+        self.assertEqual(len(source_prompts), 2)
+        self.assertIn('left mirror, rear-facing', source_prompts[0])
+        self.assertIn('right mirror, rear-facing', source_prompts[1])
+        configured = cli.read_json(self.config / 'camera.json')
+        self.assertEqual(len(configured['sources']), 2)
+        self.assertTrue(configured['trigger_enabled'])
+        self.assertEqual(configured['gpio_pins'], [])
+
+    def test_old_four_source_settings_are_rejected_without_silent_migration(self):
+        path = self.config / 'camera.json'
+        camera = cli.read_json(path)
+        camera['sources'] *= 2
+        cli.save_json(path, camera)
+        original = path.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'exactly two'):
+            cli.validators(self.config)
+        self.assertEqual(path.read_bytes(), original)
+
     def test_duplicate_keys_rejected(self):
         path = self.config / 'devices.json'
         path.write_text('{"sensor_port": null, "sensor_port": "/dev/ttyUSB0"}')
@@ -113,6 +144,10 @@ class InstallationTests(unittest.TestCase):
         for command in build_package.COMMANDS:
             self.assertIn('usr/bin/optic-coyote-' + command, files)
         self.assertFalse(any(p.startswith('etc/') for p in files))
+        self.assertIn('usr/share/doc/project-optic-coyote/draft-gpio-link/README.md', files)
+        preview = Path('docs/images/oled-distance-layout.png')
+        self.assertEqual((staged / 'usr/share/doc/project-optic-coyote' / preview).read_bytes(),
+                         (build_package.ROOT / preview).read_bytes())
 
     def test_offline_verification_rejects_corruption_and_extra_files(self):
         bundle = self.root / 'bundle'
