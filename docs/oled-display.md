@@ -154,7 +154,13 @@ Do not upload while the Pi bridge or Serial Monitor owns that port.
 
 ## Run the Pi bridge in standalone mode
 
-Use Python 3.10 or newer and pySerial. On Raspberry Pi OS:
+Use Python 3.10 or newer and pySerial. The recommended Pi 5 (4 GB) baseline is
+Raspberry Pi OS Lite (64-bit), Debian 13 Trixie. Complete the
+[Pi setup guide](rpi5-setup.md) for OS installation and device permissions.
+The [installation package](installation-package.md) also supplies the
+`optic-coyote-reverse` command; its installed default is reverse-controlled
+operation. The source command below documents standalone forwarding.
+On Raspberry Pi OS:
 
 ```sh
 sudo apt update
@@ -191,9 +197,11 @@ port. The camera selector must not open either of these same serial devices.
 
 The bridge stays in the foreground. Ctrl+C or SIGTERM requests shutdown, sends
 `STOP` to the sensor and unavailable values to the OLED when possible, and closes
-both ports. For boot startup, place the same command and stable paths in the
-Pi's existing service setup; this repository does not install or enable a system
-service automatically.
+both ports. The [installation package](installation-package.md) supplies a
+separate reverse-controlled service. Successful setup enables that service and
+the camera service for boot without starting them immediately. This foreground
+standalone command does not create a service; stop the installed reverse service
+before using it to avoid competing for the same USB endpoints.
 
 To reverse the sensor wiring order or change timing:
 

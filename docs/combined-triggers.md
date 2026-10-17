@@ -1,5 +1,13 @@
 # Reverse and blinker modes operating together
 
+The recommended operating system is Raspberry Pi OS Lite (64-bit), Debian 13
+Trixie. Complete the [Pi 5 (4 GB) setup guide](rpi5-setup.md) for installation,
+dependencies, permissions, and console HDMI configuration.
+The [installation package](installation-package.md) provides separate camera
+and reverse services. Successful setup enables both for boot; failed
+configuration leaves both disabled. Stop these services before foreground tests
+or live diagnostics.
+
 The Raspberry Pi 5 with 4 GB RAM runs two independent processes. The reverse
 bridge owns sensor acquisition and the OLED Nano. The blinker selector owns
 camera capture and HDMI output. Neither trigger state changes the other

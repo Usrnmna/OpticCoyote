@@ -21,6 +21,9 @@ htmlcov/
 /rpi-oled-bridge/reverse-diagnostic.local.json
 /rpi-oled-bridge/diagnostic-reports/
 /rpi-buzzer/buzzer.local.json
+# Backups of installation-specific settings; shipped defaults remain trackable.
+*.local.json.bak
+*.local.json.tmp
 
 # Generated review/diagnostic runs with a workspace-level report destination.
 # Synthetic fault-isolation logs belong here; authored docs and fixtures do not.
@@ -30,6 +33,8 @@ htmlcov/
 # Local build directories and Arduino-generated firmware exports.
 build/
 .build/
+# Debian packages, isolated APT caches, offline bundles, and build manifests.
+/dist/
 *.ino.hex
 *.ino.with_bootloader.hex
 *.ino.elf
